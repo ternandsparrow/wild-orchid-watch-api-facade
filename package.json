@@ -1,0 +1,19 @@
+{
+  "name": "api-facade",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "IS_DEV_MODE=true nodemon --ext js --watch . --watch package.json --exec functions-framework --target=doFacade --port=38080",
+    "start:debug": "IS_DEV_MODE=true node --inspect-brk ./node_modules/.bin/functions-framework --target=doFacade --port=38080"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^1.5.1",
+    "axios": "^0.19.2",
+    "busboy": "^0.3.1",
+    "form-data": "^3.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.4"
+  }
+}

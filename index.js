@@ -1,6 +1,7 @@
 const Busboy = require('busboy')
 const axios = require('axios')
 const FormData = require('form-data')
+const parallelLimit = require('run-parallel-limit')
 
 const apiBaseUrl = (() => {
   const val = process.env.INAT_API_PREFIX
@@ -9,12 +10,25 @@ const apiBaseUrl = (() => {
   }
   return val.replace(/\/*$/, '')
 })()
+const maxParallelTasks = (() => {
+  const val = process.env.MAX_PARALLEL_TASKS
+  if (!val) {
+    return 5
+  }
+  if (isNaN(val)) {
+    throw new Error(
+      `Config error, expected max parallel limit to be a number but was=${val}`,
+    )
+  }
+  return parseInt(val)
+})()
 const isDev = process.env.IS_DEV_MODE === 'true'
 const fieldNameObs = 'obs'
 const fieldNameObsFields = 'obsFields'
 const fieldNameProjectId = 'projectId'
 console.info(`WOW facade for iNat API
   Target API: ${apiBaseUrl}
+  Max tasks:  ${maxParallelTasks}
   Dev mode:   ${isDev}`)
 
 exports.doFacade = async (req, res) => {
@@ -104,20 +118,18 @@ exports.doFacade = async (req, res) => {
 
     const obsInatId = await createCoreObs(coreObs, authHeader)
     console.debug(`Core obs created with inatId=${obsInatId}`)
-    const [elapsedWithoutPhotos] = await Promise.all([
-      (async function() {
-        await createAllObsFieldsAndLinkProject(
-          obsInatId,
-          obsFields,
-          projectId,
-          authHeader,
-        )
-        const elapsedWithoutPhotos = Date.now() - startMs
-        return elapsedWithoutPhotos
-      })(),
-      createAllPhotos(obsInatId, files, authHeader),
-    ])
-
+    const otherEssentialTasks = createTasksForObsFieldsAndProjectLink(
+      obsInatId,
+      obsFields,
+      projectId,
+      authHeader,
+    )
+    await runParallel(otherEssentialTasks)
+    const elapsedWithoutPhotos = Date.now() - startMs
+    const photoTasks = createAllPhotoTasks(obsInatId, files, authHeader)
+    // TODO could return to client here and not wait for photos to finish, if
+    // the runtime supports that without killing us.
+    await runParallel(photoTasks)
     const elapsed = Date.now() - startMs
 
     return json(res, {
@@ -180,16 +192,17 @@ async function createCoreObs(obsRecord, authHeader) {
   }
 }
 
-async function createAllObsFieldsAndLinkProject(
+function createTasksForObsFieldsAndProjectLink(
   obsInatId,
   obsFields,
   projectId,
   authHeader,
 ) {
-  console.debug(`Creating ${obsFields.length} obs fields and linking project`)
-  // FIXME should probably send in small batches, perhaps 5
-  await Promise.all(
-    obsFields.map(f => {
+  console.debug(
+    `Creating ${obsFields.length} obs fields and linking project tasks`,
+  )
+  const result = obsFields.map(f => {
+    return function postObsField() {
       return doPost(
         'observation_field_values',
         {
@@ -198,21 +211,24 @@ async function createAllObsFieldsAndLinkProject(
         },
         authHeader,
       )
-    }),
-  )
-  return doPost(
-    'project_observations',
-    {
-      observation_id: obsInatId,
-      project_id: projectId,
-    },
-    authHeader,
-  )
+    }
+  })
+  result.push(function postProjectLinkage() {
+    return doPost(
+      'project_observations',
+      {
+        observation_id: obsInatId,
+        project_id: projectId,
+      },
+      authHeader,
+    )
+  })
+  return result
 }
 
-async function createAllPhotos(obsInatId, files, authHeader) {
-  return Promise.all(
-    files.map(f => {
+function createAllPhotoTasks(obsInatId, files, authHeader) {
+  return files.map(f => {
+    return function postPhoto() {
       const fd = new FormData()
       fd.append('observation_photo[observation_id]', obsInatId)
       fd.append('file', f.data, {
@@ -222,8 +238,26 @@ async function createAllPhotos(obsInatId, files, authHeader) {
       })
       const extraHeaders = fd.getHeaders()
       return doPost('observation_photos', fd, authHeader, extraHeaders)
-    }),
-  )
+    }
+  })
+}
+
+async function runParallel(tasks) {
+  return new Promise((resolve, reject) => {
+    const wrappedTasks = tasks.map(t => {
+      return function(callback) {
+        t()
+          .then(result => callback(null, result))
+          .catch(err => callback(err, null))
+      }
+    })
+    parallelLimit(wrappedTasks, maxParallelTasks, function(err, results) {
+      if (err) {
+        return reject(chainedError('Failed to run tasks', err))
+      }
+      return resolve(results)
+    })
+  })
 }
 
 async function doPost(urlSuffix, body, authHeader, extraHeaders = {}) {

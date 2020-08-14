@@ -1,7 +1,4 @@
-const Busboy = require('busboy')
 const axios = require('axios')
-const FormData = require('form-data')
-const parallelLimit = require('run-parallel-limit')
 
 const apiBaseUrl = (() => {
   const val = process.env.INAT_API_PREFIX
@@ -10,25 +7,28 @@ const apiBaseUrl = (() => {
   }
   return val.replace(/\/*$/, '')
 })()
-const maxParallelTasks = (() => {
-  const val = process.env.MAX_PARALLEL_TASKS
-  if (!val) {
-    return 5
-  }
-  if (isNaN(val)) {
-    throw new Error(
-      `Config error, expected max parallel limit to be a number but was=${val}`,
-    )
-  }
-  return parseInt(val)
-})()
+
+// these are keys we issue for clients to call us
+const allApiKeys = [
+  // FIXME add more clients
+  getRequiredEnvVar('CLIENT1_API_KEY'),
+]
+
+// FIXME how do we version this API?
+//   - x-version header, defaulting to newest
+// FIXME should we return the version in the resp
+
+// FIXME what credentials can we set here that won't expire?
+//   - JWT only lives for 24hrs
+//   - Bearer token lives for 30 days
+//   - might have to be user/pass
+// Do we have to mint a new token everytime? Are there rate limits on this?
+const outboundAuth = null
+
 const isDev = process.env.IS_DEV_MODE === 'true'
-const fieldNameObs = 'obs'
-const fieldNameObsFields = 'obsFields'
-const fieldNameProjectId = 'projectId'
 console.info(`WOW facade for iNat API
   Target API: ${apiBaseUrl}
-  Max tasks:  ${maxParallelTasks}
+  API Keys:   ${JSON.stringify(allApiKeys)}
   Dev mode:   ${isDev}`)
 
 exports.doFacade = async (req, res) => {
@@ -44,104 +44,38 @@ exports.doFacade = async (req, res) => {
       res.set('Access-Control-Max-Age', '3600')
       res.status(204).send('')
       return
-    } else if (req.method !== 'POST') {
-      // Return a "method not allowed" error
-      return res.status(405).end()
-    }
-    const authHeader = req.header('Authorization')
-    if (!authHeader) {
-      return json(res, { msg: 'Missing Authorization header' }, 403)
-    }
-    const { fields, files } = parseReq(req)
-    console.debug(
-      'Summary of files',
-      files.map(f => ({
-        ...f,
-        data: `${f.data.readableLength} bytes`,
-      })),
-    )
-
-    // FIXME handle photoIdsToDelete?
-
-    const coreObs = fields[fieldNameObs]
-    if (!coreObs) {
-      // TODO could also verify schema of record
+    } else if (req.path !== '/observations') {
+      const notFound = 404
+      return json(res, { msg: 'NOT FOUND', status: notFound }, notFound)
+    } else if (req.method !== 'GET') {
+      const methodNotAllowed = 405
       return json(
         res,
-        { msg: `field 'obs' (the core observation) must be supplied` },
-        400,
+        { msg: 'METHOD NOT ALLOWED', status: methodNotAllowed },
+        methodNotAllowed,
       )
     }
-
-    const projectIdRaw = fields[fieldNameProjectId]
-    if (!projectIdRaw) {
-      return json(
-        res,
-        { msg: `field 'projectId' must be supplied (it's a number)` },
-        400,
-      )
-    }
-    if (isNaN(projectIdRaw)) {
+    const urlSuffix = req.url
+    const apiKey = req.headers.authorization
+    const isAuthorised = allApiKeys.includes(apiKey)
+    if (!isAuthorised) {
+      const forbidden = 403
       return json(
         res,
         {
-          msg: `field 'projectId' was '${JSON.stringify(
-            projectIdRaw,
-          )}' but must be a number`,
+          msg: 'API key (passed via Authorization header) missing or not valid',
+          status: forbidden,
         },
-        400,
+        forbidden,
       )
     }
-    const projectId = parseInt(projectIdRaw)
+    const authHeader = await getAuthHeader()
 
-    const obsFields = fields[fieldNameObsFields]
-    if (!obsFields) {
-      return json(
-        res,
-        { msg: `field 'obsFields' (array of obs fields) must be supplied` },
-        400,
-      )
-    }
-    if (obsFields.constructor !== Array || obsFields.length < 1) {
-      // TODO could check schema of objects
-      const len = obsFields.length || 0
-      return json(
-        res,
-        {
-          msg:
-            `field 'obsFields' was '${obsFields.constructor.name}' with ` +
-            `length=${len} but must be an Array with at least one item`,
-        },
-        400,
-      )
-    }
-
-    const obsInatId = await createCoreObs(coreObs, authHeader)
-    console.debug(`Core obs created with inatId=${obsInatId}`)
-    const otherEssentialTasks = createTasksForObsFieldsAndProjectLink(
-      obsInatId,
-      obsFields,
-      projectId,
-      authHeader,
-    )
-    await runParallel(otherEssentialTasks)
-    const elapsedWithoutPhotos = Date.now() - startMs
-    const photoTasks = createAllPhotoTasks(obsInatId, files, authHeader)
-    // TODO could return to client here and not wait for photos to finish, if
-    // the runtime supports that without killing us.
-    await runParallel(photoTasks)
+    const result = await doGet(urlSuffix, authHeader)
     const elapsed = Date.now() - startMs
+    console.debug(`Elapsed time ${elapsed}ms`)
 
-    return json(res, {
-      elapsedTotalMs: elapsed,
-      elapsedWithoutPhotosMs: elapsedWithoutPhotos,
-      obsFieldCount: obsFields.length,
-      photoCount: files.length,
-      obsSummary: {
-        uuid: coreObs.uuid,
-        inatId: obsInatId,
-      },
-    })
+    return json(res, result, 200)
   } catch (err) {
     console.error('Internal server error', err)
     const body = { msg: 'Internal server error' }
@@ -152,154 +86,32 @@ exports.doFacade = async (req, res) => {
   }
 }
 
-function parseReq(req) {
-  const busboy = new Busboy({ headers: req.headers })
-  const fields = {}
-  const files = []
-
-  busboy.on('field', (fieldname, val) => {
-    console.debug(`Processed field ${fieldname}: ${val}.`)
-    fields[fieldname] = (() => {
-      try {
-        return JSON.parse(val)
-      } catch (err) {
-        console.warn(`Failed to parse JSON for fieldname=${fieldname}`)
-        return val
-      }
-    })()
-  })
-
-  busboy.on('file', (fieldname, file, filename) => {
-    console.debug(`Processed file ${filename}`)
-    files.push({
-      uploadedAsFieldname: fieldname,
-      filename,
-      data: file, // a ReadableStream
-    })
-  })
-
-  busboy.end(req.rawBody)
-  return { fields, files }
+async function getAuthHeader() {
+  // FIXME need to use env var credentials to get a JWT
+  return 'abc123'
 }
 
-async function createCoreObs(obsRecord, authHeader) {
-  try {
-    console.debug('Creating core obs: ' + JSON.stringify(obsRecord, null, 2))
-    const resp = await doPost('observations', obsRecord, authHeader)
-    return Promise.resolve(resp.data.id)
-  } catch (err) {
-    throw chainedError('Failed to create core obs', err)
-  }
-}
-
-function createTasksForObsFieldsAndProjectLink(
-  obsInatId,
-  obsFields,
-  projectId,
-  authHeader,
-) {
-  console.debug(
-    `Creating ${obsFields.length} obs fields and linking project tasks`,
-  )
-  const result = obsFields.map(f => {
-    return function postObsField() {
-      return doPost(
-        'observation_field_values',
-        {
-          ...f,
-          observation_id: obsInatId,
-        },
-        authHeader,
-      )
-    }
-  })
-  result.push(function postProjectLinkage() {
-    return doPost(
-      'project_observations',
-      {
-        observation_id: obsInatId,
-        project_id: projectId,
-      },
-      authHeader,
-    )
-  })
-  return result
-}
-
-function createAllPhotoTasks(obsInatId, files, authHeader) {
-  return files.map(f => {
-    return function postPhoto() {
-      const fd = new FormData()
-      fd.append('observation_photo[observation_id]', obsInatId)
-      fd.append('file', f.data, {
-        filename: f.filename,
-        // TODO do we get sent mime? Otherwise magic number it
-        // contentType: 'image/jpeg',
-      })
-      const extraHeaders = fd.getHeaders()
-      return doPost('observation_photos', fd, authHeader, extraHeaders)
-    }
-  })
-}
-
-async function runParallel(tasks) {
-  return new Promise((resolve, reject) => {
-    const wrappedTasks = tasks.map(t => {
-      return function(callback) {
-        t()
-          .then(result => callback(null, result))
-          .catch(err => callback(err, null))
-      }
-    })
-    parallelLimit(wrappedTasks, maxParallelTasks, function(err, results) {
-      if (err) {
-        return reject(chainedError('Failed to run tasks', err))
-      }
-      return resolve(results)
-    })
-  })
-}
-
-async function doPost(urlSuffix, body, authHeader, extraHeaders = {}) {
+async function doGet(urlSuffix, authHeader) {
+  return { msg: 'shortcut', urlSuffix, authHeader } // FIXME remove
   const url = `${apiBaseUrl}/${urlSuffix}`
-  const bodyDebugLimit = 100
-  const bodyDebug = (() => {
-    if (body.constructor === FormData) {
-      // we can't interrogate it because it's really a stream
-      return `(FormData)`
-    }
-    return JSON.stringify(body).substring(0, bodyDebugLimit)
-  })()
   try {
-    const result = await axios.post(url, body, {
+    const result = await axios.get(url, {
       headers: {
         Authorization: authHeader,
-        ...extraHeaders,
       },
     })
-    console.debug(
-      `HTTP POST ${url}\n` +
-        `  body (max ${bodyDebugLimit} chars): ${bodyDebug}\n` +
-        `  SUCCESS ${result.status}`,
-    )
+    console.debug(`HTTP GET ${url}\n` + `  SUCCESS ${result.status}`)
     return result
   } catch (err) {
-    const respBody = (() => {
-      const val = err.response.data
-      if (typeof val === 'object') {
-        return JSON.stringify(val)
-      }
-      return val
-    })()
     const msg =
-      `HTTP POST ${url}\n` +
-      `  Req body (${bodyDebugLimit} chars): ${bodyDebug}\n` +
+      `HTTP GET ${url}\n` +
       `  FAILED ${err.response.status} (${err.response.statusText})\n` +
       `  Resp body: ${respBody}`
     if (err.isAxiosError) {
       throw new Error(`Axios error: ${msg}`)
     }
     console.error(msg)
+    // FIXME log to error tracker
     throw err
   }
 }
@@ -314,4 +126,14 @@ function chainedError(msg, err) {
   const newMsg = `${msg}\nCaused by: ${err.message}`
   err.message = newMsg
   return err
+}
+
+function getRequiredEnvVar(varName) {
+  const result = process.env[varName]
+  if (!result) {
+    throw new Error(
+      `Config error, requred env var ${varName} is not set: '${result}'`,
+    )
+  }
+  return result
 }

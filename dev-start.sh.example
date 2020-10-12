@@ -1,0 +1,21 @@
+#!/bin/bash
+# script to make it easier to start the server during dev by not having to
+# recall the long-ish command needed.
+set -euo pipefail
+cd `dirname "$0"`
+
+# see code for more explination about what these values should be and how to
+# get them.
+export CLIENT1_API_KEY=00000000-0000-0000-0000-000000abc123
+export CLIENT2_API_KEY=00000000-0000-0000-0000-000000def456
+export CLIENT3_API_KEY=00000000-0000-0000-0000-000000ghi789
+export CLIENT4_API_KEY=00000000-0000-0000-0000-000000jkl000
+export INAT_API_PREFIX=https://dev.api.inat.techotom.com/v1/
+export INAT_PREFIX=https://dev.inat.techotom.com/
+export INAT_PROJECT_SLUG=wow-dev2
+export OAUTH_APP_ID=1234
+export OAUTH_APP_SECRET=1234
+export OAUTH_USERNAME=user
+export OAUTH_PASSWORD='password'
+
+yarn start${1:-}

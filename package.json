@@ -5,13 +5,15 @@
   "license": "MIT",
   "scripts": {
     "start": "IS_DEV_MODE=true nodemon --ext js --watch . --watch package.json --exec functions-framework --target=doFacade --port=38080",
-    "start:debug": "IS_DEV_MODE=true node --inspect-brk ./node_modules/.bin/functions-framework --target=doFacade --port=38080"
+    "start:debug": "IS_DEV_MODE=true node --inspect-brk ./node_modules/.bin/functions-framework --target=doFacade --port=38080",
+    "test": "jest"
   },
   "dependencies": {
     "axios": "^0.19.2"
   },
   "devDependencies": {
     "@google-cloud/functions-framework": "^1.7.1",
+    "jest": "^26.5.3",
     "nodemon": "^2.0.4"
   }
 }

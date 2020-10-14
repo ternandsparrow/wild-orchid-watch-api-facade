@@ -23,6 +23,7 @@ jobs:
       - checkout
       - setup_remote_docker:
           docker_layer_caching: false
+          version: 19.03.13 # because of https://support.circleci.com/hc/en-us/articles/360050934711
       - run:
           name: Build Docker image
           command: |

@@ -39,8 +39,32 @@ accept with the exception of `project_id`.
 # Useful links
   - [OAuth client config we use](https://www.inaturalist.org/oauth/applications/508)
 
-# Why
-TODO - write this. Talk about:
-  - handling our own API keys
-  - giving access to obscured coords to trusted parties
-  - not giving write access to the WOW project (the alternative)
+# A technical discussion about why we need this
+The WOW project needs to ability the for trusted third parties (government
+departments, etc) to access the observations from the project, including
+accurate geolocation details.
+
+The only user accounts that have access to the accurate coordinates for an
+observation are:
+  - the owner
+  - curators/managers of the WOW project
+  - other trusted users, but using this mechanism isn't feasible
+
+We can use that curator/manager mechanism but those accounts have other power
+within the iNat project like editing the project settings. We *only* want to
+expose the *read* access, but not *write* access. This means we cannot simply
+create iNat accounts for our third party clients and make those accounts
+curators.
+
+Creating a facade to the existing iNaturalist API solves this problem because
+the facade can use a user account that is a curator in the project, but only
+expose the functionality that we want. It also allows us to:
+  - issue our own API keys, one for each client.
+  - only allow *read* action (`GET`)
+  - only return observations within the WOW project (without the client having
+      to explicitly pass a `project_id=` parameter)
+  - have the option to transform the response if it means a better UX for our
+      clients
+
+Basically this facade lets us give a better experience to our third party
+clients.

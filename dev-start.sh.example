@@ -17,5 +17,11 @@ export OAUTH_APP_ID=1234
 export OAUTH_APP_SECRET=1234
 export OAUTH_USERNAME=user
 export OAUTH_PASSWORD='password'
+command -v git > /dev/null && {
+  export GIT_SHA=$(git rev-parse --short HEAD)
+} || {
+  export GIT_SHA='(git command not found)'
+}
+export SENTRY_DSN=https://00000000000000000000000000000000@o111111.ingest.sentry.io/2222222
 
 yarn start${1:-}

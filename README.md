@@ -68,3 +68,14 @@ expose the functionality that we want. It also allows us to:
 
 Basically this facade lets us give a better experience to our third party
 clients.
+
+# Design decisions
+*CORS*: no CORS support is provided because this API is intended to be consumed
+machine-to-machine. Also a secret is required to call this API and web clients,
+who use CORS, cannot keep secrets.
+
+*Google Cloud Run*: using this over Cloud Functions means we can create a
+container with everything we need. This means there's no vendor lock-in and
+running locally during dev is easy (although the tooling for functions is
+perfectly fine there too). It also means that our container can handle multiple
+requests so we won't churn through OAuth keys as fast as function might.

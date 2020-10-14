@@ -1,7 +1,11 @@
+const express = require('express')
 const axios = require('axios')
 const wowLib = require('./src/lib.js')
 const Sentry = require('@sentry/node')
 const Tracing = require('@sentry/tracing')
+
+const app = express()
+const port = process.env.PORT || 3000
 
 const apiBaseUrl = wowLib.stripTrailingSlashes(
   getRequiredEnvVar('INAT_API_PREFIX'),
@@ -61,6 +65,7 @@ if (sentryDsn) {
 let outboundAuth = null
 
 const isDev = process.env.IS_DEV_MODE === 'true'
+
 console.info(`WOW facade for iNat API
   Upstream API:   ${apiBaseUrl}
   Upstream iNat:  ${inatBaseUrl}
@@ -74,89 +79,34 @@ console.info(`WOW facade for iNat API
   Sentry DSN:     ${sentryDsn}
   Dev mode:       ${isDev}`)
 
-const strategies = [
-  // beware, order of these strategies matters
-  {
-    matcher: req => req.method === 'OPTIONS',
-    action: function handleCors(req, res) {
-      debugLog('Handling CORS preflight')
-      // CORS enabled!
-      res.set('Access-Control-Allow-Methods', 'GET')
-      res.set('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-      res.set('Access-Control-Max-Age', '3600')
-      return res.status(204).send('')
-    },
-  },
-  {
-    matcher: req => req.method !== 'GET',
-    action: function handleCors(req, res) {
-      debugLog('Rejecting non-GET request')
-      const methodNotAllowed = 405
-      return json(
-        res,
-        { msg: 'METHOD NOT ALLOWED', status: methodNotAllowed },
-        methodNotAllowed,
-      )
-    },
-  },
-  {
-    matcher: req => req.path === '/wow-observations',
-    action: async function handleObservations(req, res) {
-      const apiKey = req.headers.authorization
-      const isAuthorised = allApiKeys.includes(apiKey)
-      if (!isAuthorised) {
-        debugLog('Rejecting unauthorised request with API key:', apiKey)
-        const forbidden = 403
-        return json(
-          res,
-          {
-            msg:
-              'API key (passed via Authorization header) missing or not valid',
-            suppliedApiKey: apiKey || null,
-            status: forbidden,
-          },
-          forbidden,
-        )
-      }
-      debugLog('Handling request from API key:', apiKey)
-      const authHeader = await getOutboundAuthHeader()
-      const result = await doGetToInat(authHeader, req.query)
-      return json(res, result, 200)
-    },
-  },
-  {
-    matcher: req => req.path === '/version',
-    action: async function handleVersion(req, res) {
-      debugLog('Handling version endpoint')
-      const result = {
-        gitSha,
-        upstream: {
-          inat: inatBaseUrl,
-          inatApi: apiBaseUrl,
-          inatProjectSlug,
-        },
-      }
-      return json(res, result, 200)
-    },
-  },
-]
-
-exports.doFacade = async (req, res) => {
+app.get('/wow-observations', async (req, res) => {
   const transaction = Sentry.startTransaction({
-    op: 'doFacade',
-    name: 'The handler function',
+    op: '/wow-observations',
+    name: 'The obs handler function',
   })
   try {
     const startMs = Date.now()
-    res.set('Access-Control-Allow-Origin', '*')
-    const strategy = strategies.find(s => s.matcher(req))
-    if (!strategy) {
-      return handle404(req, res)
+    const apiKey = req.headers.authorization
+    const isAuthorised = allApiKeys.includes(apiKey)
+    if (!isAuthorised) {
+      infoLog('Rejecting unauthorised request with API key:', apiKey)
+      const forbidden = 403
+      return json(
+        res,
+        {
+          msg: 'API key (passed via Authorization header) missing or not valid',
+          suppliedApiKey: apiKey || null,
+          status: forbidden,
+        },
+        forbidden,
+      )
     }
-    await strategy.action(req, res)
+    infoLog('Handling request from API key:', apiKey)
+    const authHeader = await getOutboundAuthHeader()
+    const result = await doGetToInat(authHeader, req.query)
     const elapsed = Date.now() - startMs
-    debugLog(`Elapsed time ${elapsed}ms`)
-    return
+    infoLog(`Elapsed time ${elapsed}ms`)
+    return json(res, result, 200)
   } catch (err) {
     Sentry.captureException(err)
     console.error('Internal server error', err)
@@ -168,21 +118,31 @@ exports.doFacade = async (req, res) => {
   } finally {
     transaction.finish()
   }
-}
+})
 
-function handle404(req, res) {
-  const path = req.path
-  debugLog(`Rejecting unhandled request ${req.method} ${path}`)
-  const notFound = 404
-  return json(res, { msg: 'NOT FOUND', status: notFound }, notFound)
-}
+app.get('/version', (req, res) => {
+  infoLog('Handling version endpoint')
+  const result = {
+    gitSha,
+    upstream: {
+      inat: inatBaseUrl,
+      inatApi: apiBaseUrl,
+      inatProjectSlug,
+    },
+  }
+  return json(res, result, 200)
+})
+
+app.listen(port, () => {
+  console.log(`WOW API Facade listening on ${port}`)
+})
 
 /**
  * Get the auth header we use to make the call *to* iNat
  */
 async function getOutboundAuthHeader() {
   if (outboundAuth) {
-    debugLog('Using cached outbound OAuth header', outboundAuth)
+    infoLog('Using cached outbound OAuth header', outboundAuth)
     return outboundAuth
   }
   // We're using Resource Owner Password Credentials Flow.
@@ -202,7 +162,7 @@ async function getOutboundAuthHeader() {
     )
   }
   const { access_token, token_type } = resp.data || {}
-  debugLog(`Getting new token, iNat OAuth response`, resp.data)
+  infoLog(`Getting new token, iNat OAuth response`, resp.data)
   if (!access_token || !token_type) {
     throw new Error(
       `Failed to get OAuth token from iNat. Resp status=${
@@ -227,7 +187,7 @@ async function doGetToInat(authHeader, inboundQuerystring) {
         Authorization: authHeader,
       },
     })
-    debugLog(`HTTP GET ${url}\n` + `  SUCCESS ${resp.status}`)
+    infoLog(`HTTP GET ${url}\n` + `  SUCCESS ${resp.status}`)
     return resp.data
   } catch (err) {
     const { status, statusText, body } = err.response || {}
@@ -259,9 +219,6 @@ function getRequiredEnvVar(varName) {
   return result
 }
 
-function debugLog(...args) {
-  if (!isDev) {
-    return
-  }
-  console.debug(new Date().toISOString(), '[DEBUG]', ...args)
+function infoLog(...args) {
+  console.info(new Date().toISOString(), '[INFO]', ...args)
 }

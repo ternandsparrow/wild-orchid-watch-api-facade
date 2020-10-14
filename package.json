@@ -4,18 +4,22 @@
   "main": "index.js",
   "license": "MIT",
   "scripts": {
-    "start": "IS_DEV_MODE=true nodemon --ext js --watch . --watch package.json --exec functions-framework --target=doFacade --port=38080",
-    "start:debug": "IS_DEV_MODE=true node --inspect-brk ./node_modules/.bin/functions-framework --target=doFacade --port=38080",
+    "start": "IS_DEV_MODE=true nodemon --ext js --watch . --watch package.json --exec node index.js",
+    "start:debug": "IS_DEV_MODE=true node --inspect-brk index.js",
     "test": "jest"
   },
   "dependencies": {
     "@sentry/node": "^5.26.0",
     "@sentry/tracing": "^5.26.0",
-    "axios": "^0.19.2"
+    "axios": "^0.19.2",
+    "express": "^4.17.1"
   },
   "devDependencies": {
-    "@google-cloud/functions-framework": "^1.7.1",
     "jest": "^26.5.3",
     "nodemon": "^2.0.4"
+  },
+  "engines": {
+    "npm": ">=6.14.6",
+    "node": ">=12.18.3"
   }
 }

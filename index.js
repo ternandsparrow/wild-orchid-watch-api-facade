@@ -142,35 +142,56 @@ app.listen(port, () => {
  */
 async function getOutboundAuthHeader() {
   if (outboundAuth) {
-    infoLog('Using cached outbound OAuth header', outboundAuth)
+    infoLog('Using cached outbound auth header', outboundAuth)
     return outboundAuth
   }
-  // We're using Resource Owner Password Credentials Flow.
-  // Read more about this at https://www.inaturalist.org/pages/api+reference#auth
-  const payload = {
-    client_id: oauthAppId,
-    client_secret: oauthAppSecret,
-    grant_type: 'password',
-    username: oauthUsername,
-    password: oauthPassword,
-  }
-  const url = `${inatBaseUrl}/oauth/token`
-  const resp = await axios.post(url, payload)
-  if (resp.status !== 200) {
-    throw new Error(
-      `Failed to get OAuth token from iNat. Response status code=${resp.status}`,
-    )
-  }
-  const { access_token, token_type } = resp.data || {}
-  infoLog(`Getting new token, iNat OAuth response`, resp.data)
-  if (!access_token || !token_type) {
-    throw new Error(
-      `Failed to get OAuth token from iNat. Resp status=${
-        resp.status
-      }, body: ${JSON.stringify(resp.data)}`,
-    )
-  }
-  outboundAuth = `${token_type} ${access_token}`
+  const accessTokenHeader = await (async () => {
+    // We're using Resource Owner Password Credentials Flow.
+    // Read more about this at https://www.inaturalist.org/pages/api+reference#auth
+    const payload = {
+      client_id: oauthAppId,
+      client_secret: oauthAppSecret,
+      grant_type: 'password',
+      username: oauthUsername,
+      password: oauthPassword,
+    }
+    const url = `${inatBaseUrl}/oauth/token`
+    const resp = await axios.post(url, payload)
+    if (resp.status !== 200) {
+      throw new Error(
+        `Failed to get OAuth token from iNat. Response status code=${resp.status}`,
+      )
+    }
+    infoLog(`Getting new access token, response:`, resp.data)
+    const { access_token, token_type } = resp.data || {}
+    if (!access_token || !token_type) {
+      throw new Error(
+        `Failed to get OAuth token from iNat. Resp status=${
+          resp.status
+        }, body: ${JSON.stringify(resp.data)}`,
+      )
+    }
+    return `${token_type} ${access_token}`
+  })()
+  outboundAuth = await (async () => {
+    const resp = await axios.get(`${inatBaseUrl}/users/api_token`)
+    if (resp.status !== 200) {
+      throw new Error(
+        `Failed to get API JWT from iNat. Response status code=${resp.status}`,
+      )
+    }
+    infoLog(`Getting new API JWT, iresponse:`, resp.data)
+    const { api_token } = resp.data || {}
+    if (!api_token) {
+      throw new Error(
+        `Failed to get API JWT from iNat. Resp status=${
+          resp.status
+        }, body: ${JSON.stringify(resp.data)}`,
+      )
+    }
+    return api_token
+  })()
+  infoLog('Using new outbound auth header', outboundAuth)
   return outboundAuth
 }
 

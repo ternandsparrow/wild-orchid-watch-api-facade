@@ -5,7 +5,8 @@ set -euo pipefail
 cd `dirname "$0"`
 
 # see code for more explination about what these values should be and how to
-# get them.
+# get them. This block of env vars are also the ones that must be configured as
+# Google Cloud Secrets. See ./.circleci/README.md for more details.
 export CLIENT1_API_KEY=00000000-0000-0000-0000-000000abc123
 export CLIENT2_API_KEY=00000000-0000-0000-0000-000000def456
 export CLIENT3_API_KEY=00000000-0000-0000-0000-000000ghi789
@@ -17,11 +18,12 @@ export OAUTH_APP_ID=1234
 export OAUTH_APP_SECRET=1234
 export OAUTH_USERNAME=user
 export OAUTH_PASSWORD='password'
+export SENTRY_DSN=https://00000000000000000000000000000000@o111111.ingest.sentry.io/2222222
+
 command -v git > /dev/null && {
   export GIT_SHA=$(git rev-parse --short HEAD)
 } || {
   export GIT_SHA='(git command not found)'
 }
-export SENTRY_DSN=https://00000000000000000000000000000000@o111111.ingest.sentry.io/2222222
 
 yarn start${1:-}

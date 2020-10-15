@@ -6,6 +6,9 @@ jobs:
   build_test:
     docker:
       - image: circleci/node:12
+        auth:
+          username: $DOCKER_USERNAME
+          password: $DOCKER_PASSWORD
     steps:
       - checkout
       - run:
@@ -20,6 +23,9 @@ jobs:
     docker:
       # can swap back to cimg/base:2020.01 when the cloud run orb is fixed
       - image: google/cloud-sdk:314.0.0
+        auth:
+          username: $DOCKER_USERNAME
+          password: $DOCKER_PASSWORD
     steps:
       - checkout
       - setup_remote_docker:
@@ -46,39 +52,33 @@ jobs:
           registry-url: "gcr.io"
           image: $IMAGE_NAME
       - run:
-          name: Prepare runtime env var param
-          # this is split into its own command so we can leverage YAML multiline
-          # strings to make it readable.
-          command: "echo export SET_ENV_PARAM=\"\
-            --set-env-vars \
-                INAT_API_PREFIX=$INAT_API_PREFIX,\
-                INAT_PREFIX=$INAT_PREFIX,\
-                INAT_PROJECT_SLUG=$INAT_PROJECT_SLUG,\
-                OAUTH_APP_ID=$OAUTH_APP_ID,\
-                OAUTH_APP_SECRET=$OAUTH_APP_SECRET,\
-                OAUTH_USERNAME=$OAUTH_USERNAME,\
-                OAUTH_PASSWORD=$OAUTH_PASSWORD,\
-                SENTRY_DSN=$SENTRY_DSN,\
-                CLIENT1_API_KEY=$CLIENT1_API_KEY,\
-                CLIENT2_API_KEY=$CLIENT2_API_KEY,\
-                CLIENT3_API_KEY=$CLIENT3_API_KEY,\
-                CLIENT4_API_KEY=$CLIENT4_API_KEY\" \
-                >> $BASH_ENV"
-      - run:
-        # the CircleCI orb won't let us pass args until this is fixed
-        # https://github.com/CircleCI-Public/gcp-cloud-run-orb/issues/5
-        # so we'll just do it ourselves.
+          # the CircleCI orb won't let us pass args until this is fixed
+          # https://github.com/CircleCI-Public/gcp-cloud-run-orb/issues/5
+          # so we'll just do it ourselves.
           name: Deploy to Cloud Run
           command: |
-            source $BASH_ENV
+            set -x
             GCP_PLATFORM=managed
             GCP_SERVICE_NAME=wow-api-facade
+            # build set-env-vars value with a very long line of code
+            ZZ="     INAT_API_PREFIX=$INAT_API_PREFIX,"
+            ZZ="${ZZ}INAT_PREFIX=$INAT_PREFIX,"
+            ZZ="${ZZ}INAT_PROJECT_SLUG=$INAT_PROJECT_SLUG,"
+            ZZ="${ZZ}OAUTH_APP_ID=$OAUTH_APP_ID,"
+            ZZ="${ZZ}OAUTH_APP_SECRET=$OAUTH_APP_SECRET,"
+            ZZ="${ZZ}OAUTH_USERNAME=$OAUTH_USERNAME,"
+            ZZ="${ZZ}OAUTH_PASSWORD=$OAUTH_PASSWORD,"
+            ZZ="${ZZ}SENTRY_DSN=$SENTRY_DSN,"
+            ZZ="${ZZ}CLIENT1_API_KEY=$CLIENT1_API_KEY,"
+            ZZ="${ZZ}CLIENT2_API_KEY=$CLIENT2_API_KEY,"
+            ZZ="${ZZ}CLIENT3_API_KEY=$CLIENT3_API_KEY,"
+            ZZ="${ZZ}CLIENT4_API_KEY=$CLIENT4_API_KEY"
             gcloud beta run deploy $GCP_SERVICE_NAME \
             --image gcr.io/$GOOGLE_PROJECT_ID/$IMAGE_NAME \
             --region $GOOGLE_COMPUTE_ZONE \
             --allow-unauthenticated \
             --platform $GCP_PLATFORM \
-            $SET_ENV_PARAM
+            --set-env-vars $ZZ
             echo
             echo "Service deployed"
             echo

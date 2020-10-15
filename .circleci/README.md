@@ -10,8 +10,11 @@ are used for the build and deploy process:
        key](https://cloud.google.com/iam/docs/creating-managing-service-account-keys).
        This account must have the permission listed below.
   - `GOOGLE_COMPUTE_ZONE`: The value of the region to target your deployment.
-      `us-west1` is a good mix of "passable ping to Australia" and still tier 1
-      pricing.
+      `us-west1` is a good mix of "passable ping to Australia" and "still tier 1
+      (cheap) pricing".
+  - `DOCKER_USERNAME`: username to login to Docker Hub so we don't get rate
+      limited pulling images
+  - `DOCKER_PASSWORD`: password to login to Docker Hub
 
 You also need to configure *all the env vars* that the app will use at runtime.
 These are all the env vars that you see in the `../dev-start.sh.example` file.

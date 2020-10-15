@@ -18,7 +18,8 @@ jobs:
             yarn test
   build_push_image_cloud_run_mangaged:
     docker:
-      - image: cimg/base:2020.01
+      # can swap back to cimg/base:2020.01 when the cloud run orb is fixed
+      - image: google/cloud-sdk:314.0.0
     steps:
       - checkout
       - setup_remote_docker:
@@ -44,13 +45,12 @@ jobs:
           google-project-id: GOOGLE_PROJECT_ID
           registry-url: "gcr.io"
           image: $IMAGE_NAME
-      - cloudrun/deploy:
-          platform: "managed"
-          image: "gcr.io/$GOOGLE_PROJECT_ID/$IMAGE_NAME"
-          service-name: "orb-gcp-cloud-run"
-          region: $GOOGLE_COMPUTE_ZONE
-          unauthenticated: true
-          args: "--set-env-vars\
+      - run:
+          name: Prepare runtime env var param
+          # this is split into its own command so we can leverage YAML multiline
+          # strings to make it readable.
+          command: "echo export SET_ENV_PARAM=\"\
+            --set-env-vars \
                 INAT_API_PREFIX=$INAT_API_PREFIX,\
                 INAT_PREFIX=$INAT_PREFIX,\
                 INAT_PROJECT_SLUG=$INAT_PROJECT_SLUG,\
@@ -62,7 +62,30 @@ jobs:
                 CLIENT1_API_KEY=$CLIENT1_API_KEY,\
                 CLIENT2_API_KEY=$CLIENT2_API_KEY,\
                 CLIENT3_API_KEY=$CLIENT3_API_KEY,\
-                CLIENT4_API_KEY=$CLIENT4_API_KEY"
+                CLIENT4_API_KEY=$CLIENT4_API_KEY\" \
+                >> $BASH_ENV"
+      - run:
+        # the CircleCI orb won't let us pass args until this is fixed
+        # https://github.com/CircleCI-Public/gcp-cloud-run-orb/issues/5
+        # so we'll just do it ourselves.
+          name: Deploy to Cloud Run
+          command: |
+            source $BASH_ENV
+            GCP_PLATFORM=managed
+            GCP_SERVICE_NAME=wow-api-facade
+            gcloud beta run deploy $GCP_SERVICE_NAME \
+            --image gcr.io/$GOOGLE_PROJECT_ID/$IMAGE_NAME \
+            --region $GOOGLE_COMPUTE_ZONE \
+            --allow-unauthenticated \
+            --platform $GCP_PLATFORM \
+            $SET_ENV_PARAM
+            echo
+            echo "Service deployed"
+            echo
+            GET_GCP_DEPLOY_ENDPOINT=$(gcloud beta run services describe $GCP_SERVICE_NAME --platform $GCP_PLATFORM --region $GOOGLE_COMPUTE_ZONE --format="value(status.address.url)")
+            echo "export GCP_DEPLOY_ENDPOINT=$GET_GCP_DEPLOY_ENDPOINT" >> $BASH_ENV
+            source $BASH_ENV
+            echo $GCP_DEPLOY_ENDPOINT
 workflows:
   build_test_deploy:
     jobs:

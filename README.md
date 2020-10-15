@@ -79,3 +79,9 @@ container with everything we need. This means there's no vendor lock-in and
 running locally during dev is easy (although the tooling for functions is
 perfectly fine there too). It also means that our container can handle multiple
 requests so we won't churn through OAuth keys as fast as function might.
+
+*Google Cloud Secrets*: this lets us store secrets in a way that makes them
+readable to authorised users. CircleCI env vars cannot be read back, which is
+annoying for the client API keys that we issue. We've chosen to keep the Docker
+container agnostic of GCP and instead inject the values at deploy time. Adding
+a GCP client *into* the container would make local dev a bit more cumbersome.

@@ -60,19 +60,22 @@ jobs:
             set -x
             GCP_PLATFORM=managed
             GCP_SERVICE_NAME=wow-api-facade
+            function getSecret {
+              gcloud secrets versions access latest --secret="$1"
+            }
             # build set-env-vars value with a very long line of code
-            ZZ="     INAT_API_PREFIX=$INAT_API_PREFIX,"
-            ZZ="${ZZ}INAT_PREFIX=$INAT_PREFIX,"
-            ZZ="${ZZ}INAT_PROJECT_SLUG=$INAT_PROJECT_SLUG,"
-            ZZ="${ZZ}OAUTH_APP_ID=$OAUTH_APP_ID,"
-            ZZ="${ZZ}OAUTH_APP_SECRET=$OAUTH_APP_SECRET,"
-            ZZ="${ZZ}OAUTH_USERNAME=$OAUTH_USERNAME,"
-            ZZ="${ZZ}OAUTH_PASSWORD=$OAUTH_PASSWORD,"
-            ZZ="${ZZ}SENTRY_DSN=$SENTRY_DSN,"
-            ZZ="${ZZ}CLIENT1_API_KEY=$CLIENT1_API_KEY,"
-            ZZ="${ZZ}CLIENT2_API_KEY=$CLIENT2_API_KEY,"
-            ZZ="${ZZ}CLIENT3_API_KEY=$CLIENT3_API_KEY,"
-            ZZ="${ZZ}CLIENT4_API_KEY=$CLIENT4_API_KEY"
+            ZZ="     INAT_API_PREFIX=$(getSecret INAT_API_PREFIX),"
+            ZZ="${ZZ}INAT_PREFIX=$(getSecret INAT_PREFIX),"
+            ZZ="${ZZ}INAT_PROJECT_SLUG=$(getSecret INAT_PROJECT_SLUG),"
+            ZZ="${ZZ}OAUTH_APP_ID=$(getSecret OAUTH_APP_ID),"
+            ZZ="${ZZ}OAUTH_APP_SECRET=$(getSecret OAUTH_APP_SECRET),"
+            ZZ="${ZZ}OAUTH_USERNAME=$(getSecret OAUTH_USERNAME),"
+            ZZ="${ZZ}OAUTH_PASSWORD=$(getSecret OAUTH_PASSWORD),"
+            ZZ="${ZZ}SENTRY_DSN=$(getSecret SENTRY_DSN),"
+            ZZ="${ZZ}CLIENT1_API_KEY=$(getSecret CLIENT1_API_KEY),"
+            ZZ="${ZZ}CLIENT2_API_KEY=$(getSecret CLIENT2_API_KEY),"
+            ZZ="${ZZ}CLIENT3_API_KEY=$(getSecret CLIENT3_API_KEY),"
+            ZZ="${ZZ}CLIENT4_API_KEY=$(getSecret CLIENT4_API_KEY)"
             gcloud beta run deploy $GCP_SERVICE_NAME \
             --image gcr.io/$GOOGLE_PROJECT_ID/$IMAGE_NAME \
             --region $GOOGLE_COMPUTE_ZONE \

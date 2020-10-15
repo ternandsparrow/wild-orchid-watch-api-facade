@@ -16,49 +16,24 @@ are used for the build and deploy process:
       limited pulling images
   - `DOCKER_PASSWORD`: password to login to Docker Hub
 
-You also need to configure *all the env vars* that the app will use at runtime.
-These are all the env vars that you see in the `../dev-start.sh.example` file.
+You also need to configure the secrets that the app will use at runtime. These
+are the env vars that you see in the `../dev-start.sh.example` file. They are
+configured as [Google Cloud
+Secrets](https://cloud.google.com/secret-manager/docs/creating-and-accessing-secrets).
+*Importantly* these are only read during deploy. So if you **change a value**,
+you must re-deploy the service (from CircleCI) to have it read and configure
+the new values. You should create the secrets with the same name as the env
+vars, e.g. `INAT_API_PREFIX`. The deploy script will read the *latest* value.
 
 ## Permissions required for service account
 This list is almost certainly too permissive, but it does work. It uses some
 Google managed roles to quickly get some permissions but this should be pared
 down to only the essential permissions.
 
+  - container.secrets.get
   - storage.buckets.create
   - storage.buckets.get
   - storage.buckets.list
   - roles/iam.serviceAccountUser
-    - iam.serviceAccounts.actAs
-    - iam.serviceAccounts.get
-    - iam.serviceAccounts.list
-    - resourcemanager.projects.get
-    - resourcemanager.projects.list
   - roles/run.admin
-    - resourcemanager.projects.get
-    - resourcemanager.projects.list
-    - run.configurations.get
-    - run.configurations.list
-    - run.locations.list
-    - run.revisions.delete
-    - run.revisions.get
-    - run.revisions.list
-    - run.routes.get
-    - run.routes.invoke
-    - run.routes.list
-    - run.services.create
-    - run.services.delete
-    - run.services.get
-    - run.services.getIamPolicy
-    - run.services.list
-    - run.services.setIamPolicy
-    - run.services.update
   - roles/storage.objectAdmin
-    - resourcemanager.projects.get
-    - resourcemanager.projects.list
-    - storage.objects.create
-    - storage.objects.delete
-    - storage.objects.get
-    - storage.objects.getIamPolicy
-    - storage.objects.list
-    - storage.objects.setIamPolicy
-    - storage.objects.update

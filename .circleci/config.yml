@@ -50,6 +50,19 @@ jobs:
           service-name: "orb-gcp-cloud-run"
           region: $GOOGLE_COMPUTE_ZONE
           unauthenticated: true
+          args: "--set-env-vars\
+                INAT_API_PREFIX=$INAT_API_PREFIX,\
+                INAT_PREFIX=$INAT_PREFIX,\
+                INAT_PROJECT_SLUG=$INAT_PROJECT_SLUG,\
+                OAUTH_APP_ID=$OAUTH_APP_ID,\
+                OAUTH_APP_SECRET=$OAUTH_APP_SECRET,\
+                OAUTH_USERNAME=$OAUTH_USERNAME,\
+                OAUTH_PASSWORD=$OAUTH_PASSWORD,\
+                SENTRY_DSN=$SENTRY_DSN,\
+                CLIENT1_API_KEY=$CLIENT1_API_KEY,\
+                CLIENT2_API_KEY=$CLIENT2_API_KEY,\
+                CLIENT3_API_KEY=$CLIENT3_API_KEY,\
+                CLIENT4_API_KEY=$CLIENT4_API_KEY"
 workflows:
   build_test_deploy:
     jobs:

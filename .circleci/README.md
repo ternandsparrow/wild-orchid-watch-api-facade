@@ -1,13 +1,61 @@
 The `config.yml` file is based on [this
 blog](https://circleci.com/blog/using-circleci-workflows-to-replicate-docker-hub-automated-builds/).
 
-The follow env vars need to be configured in the CircleCI dashboard:
+The following env vars need to be configured in the CircleCI dashboard. These
+are used for the build and deploy process:
   - `GOOGLE_PROJECT_ID`: The Project ID for your Google Cloud project. This
        value can be retrieved from the project card in the Google Cloud Dashboard.
   - `GCP_PROJECT_KEY`: The base64 encoded (`base64 key-file.json`) [service
        account JSON
-       key](https://cloud.google.com/iam/docs/creating-managing-service-account-keys)
+       key](https://cloud.google.com/iam/docs/creating-managing-service-account-keys).
+       This account must have the permission listed below.
   - `GOOGLE_COMPUTE_ZONE`: The value of the region to target your deployment.
       `us-west1` is a good mix of "passable ping to Australia" and still tier 1
       pricing.
 
+You also need to configure *all the env vars* that the app will use at runtime.
+These are all the env vars that you see in the `../dev-start.sh.example` file.
+
+## Permissions required for service account
+This list is almost certainly too permissive, but it does work. It uses some
+Google managed roles to quickly get some permissions but this should be pared
+down to only the essential permissions.
+
+  - storage.buckets.create
+  - storage.buckets.get
+  - storage.buckets.list
+  - roles/iam.serviceAccountUser
+    - iam.serviceAccounts.actAs
+    - iam.serviceAccounts.get
+    - iam.serviceAccounts.list
+    - resourcemanager.projects.get
+    - resourcemanager.projects.list
+  - roles/run.admin
+    - resourcemanager.projects.get
+    - resourcemanager.projects.list
+    - run.configurations.get
+    - run.configurations.list
+    - run.locations.list
+    - run.revisions.delete
+    - run.revisions.get
+    - run.revisions.list
+    - run.routes.get
+    - run.routes.invoke
+    - run.routes.list
+    - run.services.create
+    - run.services.delete
+    - run.services.get
+    - run.services.getIamPolicy
+    - run.services.list
+    - run.services.setIamPolicy
+    - run.services.update
+  - roles/storage.objectAdmin
+    - resourcemanager.projects.get
+    - resourcemanager.projects.list
+    - storage.objects.create
+    - storage.objects.delete
+    - storage.objects.get
+    - storage.objects.getIamPolicy
+    - storage.objects.list
+    - storage.objects.setIamPolicy
+    - storage.objects.update

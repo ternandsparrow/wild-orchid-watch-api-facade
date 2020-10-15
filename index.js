@@ -145,6 +145,7 @@ async function getOutboundAuthHeader() {
     infoLog('Using cached outbound auth header', outboundAuth)
     return outboundAuth
   }
+  infoLog('No cached outbound auth header, renewing...')
   const accessTokenHeader = await (async () => {
     // We're using Resource Owner Password Credentials Flow.
     // Read more about this at https://www.inaturalist.org/pages/api+reference#auth
@@ -162,7 +163,7 @@ async function getOutboundAuthHeader() {
         `Failed to get OAuth token from iNat. Response status code=${resp.status}`,
       )
     }
-    infoLog(`Getting new access token, response:`, resp.data)
+    infoLog(`New access token, response:`, resp.data)
     const { access_token, token_type } = resp.data || {}
     if (!access_token || !token_type) {
       throw new Error(
@@ -173,20 +174,27 @@ async function getOutboundAuthHeader() {
     }
     return `${token_type} ${access_token}`
   })()
+  infoLog('Exchanging access token for API JWT')
   outboundAuth = await (async () => {
-    const resp = await axios.get(`${inatBaseUrl}/users/api_token`)
+    const resp = await axios.get(`${inatBaseUrl}/users/api_token`, {
+      headers: {
+        Authorization: accessTokenHeader,
+      },
+    })
     if (resp.status !== 200) {
       throw new Error(
         `Failed to get API JWT from iNat. Response status code=${resp.status}`,
       )
     }
-    infoLog(`Getting new API JWT, iresponse:`, resp.data)
+    infoLog(`New API JWT, response:`, resp.data)
     const { api_token } = resp.data || {}
     if (!api_token) {
       throw new Error(
-        `Failed to get API JWT from iNat. Resp status=${
+        `Failed to get API JWT from iNat. Status (${
           resp.status
-        }, body: ${JSON.stringify(resp.data)}`,
+        }) was OK but didn't find the JWT in the repsonse: ${JSON.stringify(
+          resp.data,
+        )}`,
       )
     }
     return api_token

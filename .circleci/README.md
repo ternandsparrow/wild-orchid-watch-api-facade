@@ -30,7 +30,7 @@ This list is almost certainly too permissive, but it does work. It uses some
 Google managed roles to quickly get some permissions but this should be pared
 down to only the essential permissions.
 
-  - container.secrets.get
+  - secretmanager.versions.access
   - storage.buckets.create
   - storage.buckets.get
   - storage.buckets.list

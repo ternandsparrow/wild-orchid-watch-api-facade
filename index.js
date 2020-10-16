@@ -103,16 +103,17 @@ app.get('/wow-observations', async (req, res) => {
     }
     infoLog('Handling request from API key:', apiKey)
     const authHeader = await getOutboundAuthHeader()
-    const result = await doGetToInat(authHeader, req.query)
+    res.set('Content-type', 'application/json')
+    await streamInatGetToCaller(authHeader, req.query, res)
     const elapsed = Date.now() - startMs
     infoLog(`Elapsed time ${elapsed}ms`)
-    return json(res, result, 200)
+    return res.status(200).end()
   } catch (err) {
     Sentry.captureException(err)
     console.error('Internal server error', err)
     const body = { msg: 'Internal server error' }
     if (isDev) {
-      body.detail = err.message
+      body.devDetail = err.message
     }
     return json(res, body, 500)
   } finally {
@@ -136,6 +137,20 @@ app.get('/version', (req, res) => {
 app.listen(port, () => {
   console.log(`WOW API Facade listening on ${port}`)
 })
+
+function processStreamChunks(stream, chunkCallback) {
+  return new Promise((resolve, reject) => {
+    stream.on('data', chunk => {
+      try {
+        chunkCallback(chunk)
+      } catch (err) {
+        return reject(err)
+      }
+    })
+    stream.on('end', resolve)
+    stream.on('error', reject)
+  })
+}
 
 /**
  * Get the auth header we use to make the call *to* iNat
@@ -203,7 +218,7 @@ async function getOutboundAuthHeader() {
   return outboundAuth
 }
 
-async function doGetToInat(authHeader, inboundQuerystring) {
+async function streamInatGetToCaller(authHeader, inboundQuerystring, res) {
   const url = `${apiBaseUrl}/observations`
   const params = {
     ...inboundQuerystring,
@@ -215,17 +230,36 @@ async function doGetToInat(authHeader, inboundQuerystring) {
       headers: {
         Authorization: authHeader,
       },
+      responseType: 'stream',
     })
     infoLog(`HTTP GET ${url}\n` + `  SUCCESS ${resp.status}`)
-    return resp.data
+    await processStreamChunks(resp.data, (
+      chunk /* chunk is an ArrayBuffer */,
+    ) => {
+      res.write(new Buffer.from(chunk))
+    })
   } catch (err) {
-    const { status, statusText, body } = err.response || {}
+    const { status, statusText, body } = await (async () => {
+      const r = err.response
+      if (!r) {
+        return {}
+      }
+      const chunks = []
+      await processStreamChunks(r.data, chunk => chunks.push(chunk))
+      // thanks https://stackoverflow.com/a/49428486/1410035
+      const body = Buffer.concat(chunks).toString('utf8')
+      return {
+        status: r.status,
+        statusText: r.statusText,
+        body,
+      }
+    })()
     const msg =
       `HTTP GET ${url}\n` +
       `  FAILED ${status} (${statusText})\n` +
       `  Resp body: ${body}\n` +
       `  Error message: ${err.message} `
-    if (err.isAxiosError) {
+    if (err.isAxiosError && isDev) {
       throw new Error(`Axios error: ${msg}`)
     }
     console.error(msg)

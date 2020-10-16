@@ -20,6 +20,9 @@ export OAUTH_USERNAME=user
 export OAUTH_PASSWORD='password'
 export SENTRY_DSN=https://00000000000000000000000000000000@o111111.ingest.sentry.io/2222222
 
+# dev mode is enabled in `yarn start`, but you can override it for testing
+# export IS_DEV_MODE=false
+
 command -v git > /dev/null && {
   export GIT_SHA=$(git rev-parse --short HEAD)
 } || {

@@ -17,6 +17,17 @@ This API is a facade in front of [`GET
 from the iNaturalist API. Any params you can pass to that endpoint, we also
 accept with the exception of `project_id` as this is set to the WOW project.
 
+# Example clients
+We have prepared some example clients in some common programming languages to
+show how can consume this API. See the examples in
+[example-clients](./example-clients/):
+
+  - [Java](./example-clients/java/)
+  - [NodeJS](./example-clients/nodejs/)
+  - [Python](./example-clients/python/)
+
+This is just a JSON over HTTP API so consume it however best suits you.
+
 # Developer quickstart
   1. clone repo
   1. install dependencies `yarn`

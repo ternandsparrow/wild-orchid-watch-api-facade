@@ -1,0 +1,13 @@
+{
+  "name": "wow-nodejs-example",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^0.20.0"
+  }
+}

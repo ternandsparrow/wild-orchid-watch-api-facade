@@ -1,8 +1,9 @@
-node_modules
-npm-debug.log
+.circleci
+.dockerignore
 .git
 .gitignore
-dev-start.sh
-.dockerignore
-.circleci
 Dockerfile
+dev-start.sh
+example-clients
+node_modules
+npm-debug.log

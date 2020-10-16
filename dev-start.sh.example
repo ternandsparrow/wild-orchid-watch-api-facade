@@ -11,7 +11,10 @@ export CLIENT1_API_KEY=00000000-0000-0000-0000-000000abc123
 export CLIENT2_API_KEY=00000000-0000-0000-0000-000000def456
 export CLIENT3_API_KEY=00000000-0000-0000-0000-000000ghi789
 export CLIENT4_API_KEY=00000000-0000-0000-0000-000000jkl000
+# export INAT_API_PREFIX=https://api.inaturalist.org/v1/
 export INAT_API_PREFIX=https://dev.api.inat.techotom.com/v1/
+# the www. prefix seems important otherwise HTTP redirects mess us up
+# export INAT_PREFIX=https://www.inaturalist.org/
 export INAT_PREFIX=https://dev.inat.techotom.com/
 export INAT_PROJECT_SLUG=wow-dev2
 export OAUTH_APP_ID=1234

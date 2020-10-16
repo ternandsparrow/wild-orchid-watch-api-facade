@@ -189,9 +189,12 @@ async function getOutboundAuthHeader() {
     }
     return `${token_type} ${access_token}`
   })()
-  infoLog('Exchanging access token for API JWT')
   outboundAuth = await (async () => {
-    const resp = await axios.get(`${inatBaseUrl}/users/api_token`, {
+    const url = `${inatBaseUrl}/users/api_token`
+    infoLog(
+      `Exchanging access token (${accessTokenHeader}) for API JWT at URL=${url}`,
+    )
+    const resp = await axios.get(url, {
       headers: {
         Authorization: accessTokenHeader,
       },
@@ -201,7 +204,6 @@ async function getOutboundAuthHeader() {
         `Failed to get API JWT from iNat. Response status code=${resp.status}`,
       )
     }
-    infoLog(`New API JWT, response:`, resp.data)
     const { api_token } = resp.data || {}
     if (!api_token) {
       throw new Error(
@@ -212,6 +214,7 @@ async function getOutboundAuthHeader() {
         )}`,
       )
     }
+    infoLog(`New API JWT, response:`, resp.data)
     return api_token
   })()
   infoLog('Using new outbound auth header', outboundAuth)

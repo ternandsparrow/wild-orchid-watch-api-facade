@@ -1,8 +1,13 @@
+const fs = require('fs')
+const fsP = require('fs/promises')
 const express = require('express')
 const axios = require('axios')
 const wowLib = require('./src/lib.js')
 const Sentry = require('@sentry/node')
 const Tracing = require('@sentry/tracing')
+const formidable = require('formidable')
+const cors = require('cors')
+const FormData = require('form-data')
 
 const app = express()
 const port = process.env.PORT || 3000
@@ -13,6 +18,7 @@ const apiBaseUrl = wowLib.stripTrailingSlashes(
 const inatBaseUrl = wowLib.stripTrailingSlashes(
   getRequiredEnvVar('INAT_PREFIX'),
 )
+const apiUrl = 'https://dev.api.inat.techotom.com' // FIXME make config
 
 const gitSha = process.env.GIT_SHA || '(local dev)'
 
@@ -120,6 +126,141 @@ app.get('/wow-observations', async (req, res) => {
     transaction.finish()
   }
 })
+
+const obsCorsOptions = {methods: ['POST']}
+app.options('/observations', cors(obsCorsOptions))
+
+app.post('/observations', cors(obsCorsOptions), (req, res) => {
+  res.set('Content-type', 'application/json')
+  postHandler(req)
+    .then(({status, body}) => {
+      return res.status(status || 200).send(body)
+    })
+    .catch(err => {
+      // FIXME send to Sentry
+      console.error('Error while handling POST /observations', err)
+      res.status(500).send({error: 'The server exploded :('})
+    })
+})
+
+async function postHandler(req) {
+  // FIXME should we support ETag to detect duplicate uploads?
+  const expectedContentType = 'multipart/form-data'
+  const isNotMultipart = !~(req.headers['content-type'] || '')
+    .indexOf(expectedContentType)
+  if (isNotMultipart) {
+    return {
+      status: 415,
+      body: {error: `Can only handle ${expectedContentType}`}
+    }
+  }
+  const authHeader = req.headers['authorization']
+  // FIXME could check it looks like a JWT
+  if (!authHeader) {
+    return {
+      status: 401,
+      body: {error: `Authorization must be provided`}
+    }
+  }
+  try {
+    console.log(`Checking if supplied auth is valid: ${authHeader.substr(0,20)}...`)
+    const resp = await axios.get(`${apiUrl}/v1/users/me`, {
+      headers: { Authorization: authHeader }
+    })
+    infoLog('Auth from observations bundle is valid', resp.status)
+  } catch (err) {
+    infoLog('Verifying auth passed in observations bundle has failed!', err.response.status)
+    return {
+      status: 401,
+      body: {
+        error: 'Authorization was rejected by upstream iNat server',
+        upstreamError: err.response.data,
+      }
+    }
+  }
+  // FIXME try to parse files without writing to disk, just keep in memory
+  const form = formidable({ multiples: true })
+  const {fields, files} = await new Promise((resolve, reject) => {
+    form.parse(req, (err, fields, files) => {
+      if (err) {
+        return reject(err)
+      }
+      return resolve({fields, files})
+    })
+  })
+  try {
+    const validationError = validate(fields, files)
+    if (validationError) {
+      return {
+        status: 400,
+        body: {message: validationError}
+      }
+    }
+    infoLog(`Handling request with ${Object.keys(fields).length} fields and ${
+      Object.keys(files).length} files`)
+    // FIXME should be async and triggered again if this server fails (durable trigger)
+    await uploadToInat(fields.projectId, files, authHeader)
+    // FIXME handle errors?
+    // FIXME respond to caller once files are saved (to GCP) and req is queued
+    return {body: { fields, files }} // FIXME
+  } catch (err) {
+    if (err.response) {
+      const {status, data} = err.response
+      if (status) {
+        const body = typeof data === 'string' ? data : JSON.stringify(data)
+        throw new Error(`Upstream failed with status ${status} and body: ${body}`)
+      }
+    }
+    throw err
+  } finally {
+    await cleanup(files)
+  }
+}
+
+function getPhotosFromFiles(files) {
+  return files.photos.constructor === Array ? files.photos : [files.photos]
+}
+
+async function uploadToInat(projectId, files, authHeader) {
+  const photos = getPhotosFromFiles(files)
+  infoLog(`Uploading ${photos.length} photos`)
+  // FIXME need to handle DELETE and adding photos to an existing obs
+  const photoResps = await Promise.all(photos.map(p => {
+    const form = new FormData()
+    // FIXME do we need to include mime?
+    const fileBytes = fs.readFileSync(p.filepath)
+    form.append('file', fileBytes)
+    return axios.post(
+      `${apiUrl}/v1/photos`,
+      form.getBuffer(),
+      {
+        headers: {
+          ...form.getHeaders(),
+          Authorization: authHeader,
+        }
+      }
+    )
+  }))
+  // FIXME catch image post error, like an image/* that iNat doesn't like
+  const photoIds = photoResps.map(e => e.data.id)
+  infoLog(`Photo IDs from responses: ${photoIds}`)
+  const obsJson = JSON.parse(fs.readFileSync(files.observation.filepath))
+  const obsBody = {
+    observation: obsJson,
+    local_photos: {
+      0: photoIds,
+    },
+    uploader: true,
+    refresh_index: true,
+    project_id: [
+      projectId,
+    ]
+  }
+  const resp = await axios.post(`${apiUrl}/v1/observations`, obsBody, {
+    headers: { Authorization: authHeader }
+  })
+  infoLog(`Response to creating obs: ${resp.status}`, resp.data)
+}
 
 app.get('/version', (req, res) => {
   infoLog('Handling version endpoint')
@@ -287,4 +428,36 @@ function getRequiredEnvVar(varName) {
 
 function infoLog(...args) {
   console.info(new Date().toISOString(), '[INFO]', ...args)
+}
+
+function validate(fields, files) {
+  if (!files.observation) {
+    return 'Must send an `observation` file containing JSON'
+  }
+  if (files.observation.mimetype !== 'application/json') {
+    return '`observation` file must be `application/json`'
+  }
+  if (!fields.projectId) {
+    return 'Must send a `projectId` numeric field'
+  }
+  if (isNaN(fields.projectId)) {
+    return '`projectId` must be a numeric field'
+  }
+  if (!files.photos) {
+    return 'Must send `photos` field'
+  }
+  const photos = getPhotosFromFiles(files)
+  if (!photos.every(e => e.mimetype.startsWith('image/'))) {
+    return 'All `photos` files must have a `image/*` mime'
+  }
+  // FIXME add other checks
+}
+
+function cleanup(files) {
+  return Promise.all(Object.values(files).map(curr => {
+    if (curr.constructor === Array) {
+      return Promise.all(curr.map(e => fsP.rm(e.filepath)))
+    }
+    return fsP.rm(curr.filepath)
+  }))
 }

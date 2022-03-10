@@ -83,9 +83,9 @@ Basically this facade lets us give a better experience to our third party
 clients.
 
 # Design decisions
-*CORS*: no CORS support is provided because this API is intended to be consumed
-machine-to-machine. Also a secret is required to call this API and web clients,
-who use CORS, cannot keep secrets.
+*CORS*: no CORS support is provided on the `/wow-observations` endpoint because
+this API is intended to be consumed machine-to-machine clients, not from a
+browser.
 
 *Google Cloud Run*: using this over Cloud Functions means we can create a
 container with everything we need. This means there's no vendor lock-in and

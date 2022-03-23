@@ -4,6 +4,8 @@
 set -euxo pipefail
 cd "$(dirname "$0")"
 
+source ./config-env.sh
+
 : ${GCP_SERVICE_NAME:-}
 : ${CUSTOM_DOMAIN:-}
 : ${TAG:-}
@@ -26,8 +28,6 @@ ZZ+="CLIENT1_API_KEY=$(getSecret CLIENT1_API_KEY),"
 ZZ+="CLIENT2_API_KEY=$(getSecret CLIENT2_API_KEY),"
 ZZ+="CLIENT3_API_KEY=$(getSecret CLIENT3_API_KEY),"
 ZZ+="CLIENT4_API_KEY=$(getSecret CLIENT4_API_KEY)"
-
-source ./config-image-name-env-vars.sh
 
 gcloud beta run deploy $GCP_SERVICE_NAME \
   --image ${IMAGE_FULL:?} \

@@ -3,7 +3,7 @@ orbs:
   gcp-gcr: circleci/gcp-gcr@0.9.0
   cloudrun: circleci/gcp-cloud-run@1.0.2
 jobs:
-  build_test:
+  do_tests:
     docker:
       - image: circleci/node:12
         auth:
@@ -19,9 +19,8 @@ jobs:
           name: Run Tests
           command: |
             yarn test
-  build_push_image_cloud_run_mangaged:
+  build_push_image:
     docker:
-      # can swap back to cimg/base:2020.01 when the cloud run orb is fixed
       - image: google/cloud-sdk:314.0.0
         auth:
           username: $DOCKER_USERNAME
@@ -34,15 +33,8 @@ jobs:
       - run:
           name: Build Docker image
           command: |
-            echo ${GCP_PROJECT_KEY} | base64 --decode --ignore-garbage > $HOME/gcloud-service-key.json
-            echo 'export GOOGLE_CLOUD_KEYS=$(cat $HOME/gcloud-service-key.json)' >> $BASH_ENV
-            echo 'export TAG=${CIRCLE_SHA1}' >> $BASH_ENV
-            echo 'export IMAGE_NAME=$CIRCLE_PROJECT_REPONAME' >> $BASH_ENV
-            source $BASH_ENV
-            env \
-              IMAGE_PREFIX=gcr.io/$GOOGLE_PROJECT_ID/$IMAGE_NAME \
-              IMAGE_TAG=$TAG \
-              bash docker-build.sh
+            source .circleci/config-env.sh
+            bash docker-build.sh
       - gcp-gcr/gcr-auth:
           gcloud-service-key: GOOGLE_CLOUD_KEYS
           google-project-id: GOOGLE_PROJECT_ID
@@ -51,48 +43,60 @@ jobs:
           google-project-id: GOOGLE_PROJECT_ID
           registry-url: "gcr.io"
           image: $IMAGE_NAME
+  deploy_master:
+    docker:
+      - image: google/cloud-sdk:314.0.0
+        auth:
+          username: $DOCKER_USERNAME
+          password: $DOCKER_PASSWORD
+    steps:
+      - checkout
       - run:
-          # the CircleCI orb won't let us pass args until this is fixed
-          # https://github.com/CircleCI-Public/gcp-cloud-run-orb/issues/5
-          # so we'll just do it ourselves.
-          name: Deploy to Cloud Run
+          name: Deploy to Cloud Run (master)
           command: |
-            set -x
-            GCP_PLATFORM=managed
-            GCP_SERVICE_NAME=wow-api-facade
-            function getSecret {
-              gcloud secrets versions access latest --secret="$1"
-            }
-            # build set-env-vars value with a very long line of code
-            ZZ="     INAT_API_PREFIX=$(getSecret INAT_API_PREFIX),"
-            ZZ="${ZZ}INAT_PREFIX=$(getSecret INAT_PREFIX),"
-            ZZ="${ZZ}INAT_PROJECT_SLUG=$(getSecret INAT_PROJECT_SLUG),"
-            ZZ="${ZZ}OAUTH_APP_ID=$(getSecret OAUTH_APP_ID),"
-            ZZ="${ZZ}OAUTH_APP_SECRET=$(getSecret OAUTH_APP_SECRET),"
-            ZZ="${ZZ}OAUTH_USERNAME=$(getSecret OAUTH_USERNAME),"
-            ZZ="${ZZ}OAUTH_PASSWORD=$(getSecret OAUTH_PASSWORD),"
-            ZZ="${ZZ}SENTRY_DSN=$(getSecret SENTRY_DSN),"
-            ZZ="${ZZ}CLIENT1_API_KEY=$(getSecret CLIENT1_API_KEY),"
-            ZZ="${ZZ}CLIENT2_API_KEY=$(getSecret CLIENT2_API_KEY),"
-            ZZ="${ZZ}CLIENT3_API_KEY=$(getSecret CLIENT3_API_KEY),"
-            ZZ="${ZZ}CLIENT4_API_KEY=$(getSecret CLIENT4_API_KEY)"
-            gcloud beta run deploy $GCP_SERVICE_NAME \
-            --image gcr.io/$GOOGLE_PROJECT_ID/$IMAGE_NAME \
-            --region $GOOGLE_COMPUTE_ZONE \
-            --allow-unauthenticated \
-            --platform $GCP_PLATFORM \
-            --set-env-vars $ZZ
-            echo
-            echo "Service deployed"
-            echo
-            GET_GCP_DEPLOY_ENDPOINT=$(gcloud beta run services describe $GCP_SERVICE_NAME --platform $GCP_PLATFORM --region $GOOGLE_COMPUTE_ZONE --format="value(status.address.url)")
-            echo "export GCP_DEPLOY_ENDPOINT=$GET_GCP_DEPLOY_ENDPOINT" >> $BASH_ENV
-            source $BASH_ENV
-            echo $GCP_DEPLOY_ENDPOINT
+            source .circleci/config-env.sh
+            env \
+              GCP_SERVICE_NAME=wow-api-facade \
+              CUSTOM_DOMAIN=api-facade.wildorchidwatch.org \
+              bash .circleci/deploy-cloud-run.sh
+  deploy_dev:
+    docker:
+      - image: google/cloud-sdk:314.0.0
+        auth:
+          username: $DOCKER_USERNAME
+          password: $DOCKER_PASSWORD
+    steps:
+      - checkout
+      - run:
+          name: Deploy to Cloud Run (dev)
+          command: |
+            source .circleci/config-env.sh
+            env \
+              GCP_SERVICE_NAME=dev-wow-api-facade \
+              CUSTOM_DOMAIN=dev-api-facade.wildorchidwatch.org \
+              bash .circleci/deploy-cloud-run.sh
 workflows:
-  build_test_deploy:
+  dev:
     jobs:
-      - build_test
-      - build_push_image_cloud_run_mangaged:
+      - do_tests
+      - build_push_image:
+          filters:
+            branches:
+              only: dev
           requires:
             - build_test
+      - deploy_dev:
+          requires:
+            - build_push_image
+  prod:
+    jobs:
+      - do_tests:
+          filters:
+            branches:
+              only: master
+      - build_push_image:
+          requires:
+            - build_test
+      - deploy_master:
+          requires:
+            - build_push_image

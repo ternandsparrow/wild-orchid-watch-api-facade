@@ -43,6 +43,7 @@ jobs:
           google-project-id: GOOGLE_PROJECT_ID
           registry-url: "gcr.io"
           image: $IMAGE_NAME
+          tag: $IMAGE_TAG
   deploy_master:
     docker:
       - image: google/cloud-sdk:314.0.0

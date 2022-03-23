@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 
 : ${GCP_SERVICE_NAME:-}
 : ${CUSTOM_DOMAIN:-}
-: ${TAG:-}
+: ${IMAGE_FULL:-}
 
 source ./config-env.sh
 commonParams="--platform managed --region ${GOOGLE_COMPUTE_ZONE:?}"

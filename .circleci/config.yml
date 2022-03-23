@@ -84,7 +84,7 @@ workflows:
             branches:
               only: dev
           requires:
-            - build_test
+            - do_tests
       - deploy_dev:
           requires:
             - build_push_image
@@ -96,7 +96,7 @@ workflows:
               only: master
       - build_push_image:
           requires:
-            - build_test
+            - do_tests
       - deploy_master:
           requires:
             - build_push_image

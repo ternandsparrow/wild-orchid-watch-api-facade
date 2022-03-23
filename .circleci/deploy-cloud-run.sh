@@ -4,15 +4,17 @@
 set -euxo pipefail
 cd "$(dirname "$0")"
 
-source ./config-env.sh
-
 : ${GCP_SERVICE_NAME:-}
 : ${CUSTOM_DOMAIN:-}
 : ${TAG:-}
+
+source ./config-env.sh
 commonParams="--platform managed --region ${GOOGLE_COMPUTE_ZONE:?}"
 
 function getSecret {
-  gcloud secrets versions access latest --secret="$1"
+  gcloud secrets versions access latest \
+    --project ${GOOGLE_PROJECT_ID:?} \
+    --secret $1
 }
 
 # build set-env-vars value in a more readable way

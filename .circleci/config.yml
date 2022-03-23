@@ -54,11 +54,9 @@ jobs:
       - run:
           name: Deploy to Cloud Run (master)
           command: |
-            source .circleci/config-env.sh
-            env \
-              GCP_SERVICE_NAME=wow-api-facade \
-              CUSTOM_DOMAIN=api-facade.wildorchidwatch.org \
-              bash .circleci/deploy-cloud-run.sh
+            export GCP_SERVICE_NAME=wow-api-facade
+            export CUSTOM_DOMAIN=api-facade.wildorchidwatch.org
+            bash .circleci/deploy-cloud-run.sh
   deploy_dev:
     docker:
       - image: google/cloud-sdk:314.0.0
@@ -70,11 +68,9 @@ jobs:
       - run:
           name: Deploy to Cloud Run (dev)
           command: |
-            source .circleci/config-env.sh
-            env \
-              GCP_SERVICE_NAME=dev-wow-api-facade \
-              CUSTOM_DOMAIN=dev-api-facade.wildorchidwatch.org \
-              bash .circleci/deploy-cloud-run.sh
+            export GCP_SERVICE_NAME=dev-wow-api-facade
+            export CUSTOM_DOMAIN=dev-api-facade.wildorchidwatch.org
+            bash .circleci/deploy-cloud-run.sh
 workflows:
   dev:
     jobs:

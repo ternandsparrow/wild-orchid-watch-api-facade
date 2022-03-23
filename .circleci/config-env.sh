@@ -2,6 +2,8 @@
 set -euxo pipefail
 keyFile=$HOME/gcloud-service-key.json
 echo ${GCP_PROJECT_KEY:?} | base64 --decode --ignore-garbage > $keyFile
+gcloud auth activate-service-account --key-file $keyFile
+# this var used by gcp-gcr/gcr-auth step
 echo "export GOOGLE_CLOUD_KEYS=\$(cat $keyFile)" >> $BASH_ENV
 IMAGE_NAME=${CIRCLE_PROJECT_REPONAME:?}
 echo "export IMAGE_NAME=$IMAGE_NAME" >> $BASH_ENV

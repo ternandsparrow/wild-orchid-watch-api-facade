@@ -45,15 +45,9 @@ gcloud beta run services describe \
   $commonParams \
   --format="value(status.address.url)"
 
-if gcloud beta run domain-mappings describe \
-    --domain $CUSTOM_DOMAIN \
-    $commonParams &> /dev/null; then
-  echo "[INFO] custom domain $CUSTOM_DOMAIN already exists, nothing to do"
-else
-  echo "[INFO] custom domain $CUSTOM_DOMAIN does NOT exist, creating..."
-  gcloud beta run domain-mappings create \
-    --service $GCP_SERVICE_NAME \
-    --domain $CUSTOM_DOMAIN \
-    $commonParams
-fi
-
+echo "[INFO] updating custom domain mapping"
+gcloud beta run domain-mappings create \
+  --service $GCP_SERVICE_NAME \
+  --domain $CUSTOM_DOMAIN \
+  --force-override \
+  $commonParams

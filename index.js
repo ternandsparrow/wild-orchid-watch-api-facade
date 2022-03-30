@@ -1,13 +1,14 @@
 const fs = require('fs')
 const fsP = require('fs/promises')
-const express = require('express')
-const axios = require('axios')
-const wowLib = require('./src/lib.js')
+
+const FormData = require('form-data')
 const Sentry = require('@sentry/node')
 const Tracing = require('@sentry/tracing')
-const formidable = require('formidable')
+const axios = require('axios')
 const cors = require('cors')
-const FormData = require('form-data')
+const express = require('express')
+const formidable = require('formidable')
+const wowLib = require('./src/lib.js')
 
 const app = express()
 const port = process.env.PORT || 3000
@@ -18,8 +19,6 @@ const apiBaseUrl = wowLib.stripTrailingSlashes(
 const inatBaseUrl = wowLib.stripTrailingSlashes(
   getRequiredEnvVar('INAT_PREFIX'),
 )
-const apiUrl = 'https://dev.api.inat.techotom.com' // FIXME make config
-
 const gitSha = process.env.GIT_SHA || '(local dev)'
 
 // the WOW project. Slug is the fragment of URL, e.g. wow_project, not the
@@ -164,7 +163,7 @@ async function postHandler(req) {
   }
   try {
     console.log(`Checking if supplied auth is valid: ${authHeader.substr(0,20)}...`)
-    const resp = await axios.get(`${apiUrl}/v1/users/me`, {
+    const resp = await axios.get(`${apiBaseUrl}/v1/users/me`, {
       headers: { Authorization: authHeader }
     })
     infoLog('Auth from observations bundle is valid', resp.status)
@@ -231,7 +230,7 @@ async function uploadToInat(projectId, files, authHeader) {
     const fileBytes = fs.readFileSync(p.filepath)
     form.append('file', fileBytes)
     return axios.post(
-      `${apiUrl}/v1/photos`,
+      `${apiBaseUrl}/v1/photos`,
       form.getBuffer(),
       {
         headers: {
@@ -256,7 +255,7 @@ async function uploadToInat(projectId, files, authHeader) {
       projectId,
     ]
   }
-  const resp = await axios.post(`${apiUrl}/v1/observations`, obsBody, {
+  const resp = await axios.post(`${apiBaseUrl}/v1/observations`, obsBody, {
     headers: { Authorization: authHeader }
   })
   infoLog(`Response to creating obs: ${resp.status}`, resp.data)
@@ -363,7 +362,7 @@ async function getOutboundAuthHeader() {
 }
 
 async function streamInatGetToCaller(authHeader, inboundQuerystring, res) {
-  const url = `${apiBaseUrl}/observations`
+  const url = `${apiBaseUrl}/v1/observations`
   const params = {
     ...inboundQuerystring,
     project_id: inatProjectSlug,

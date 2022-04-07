@@ -31,22 +31,25 @@ This is just a JSON over HTTP API so consume it however best suits you.
 # Developer quickstart
   1. clone repo
   1. install dependencies `yarn`
-  1. copy example dev start script
+  1. copy example env file
       ```bash
-      cp dev-start.sh.example dev-start.sh
+      cp .env.example .env
       ```
-  1. edit dev start script to add required env vars
+  1. edit the env file to add required env vars
       ```bash
-      vim dev-start.sh
+      vim .env
       ```
   1. start server
       ```bash
-      bash dev-start.sh
+      yarn start
+      # or
+      yarn docker:build
+      yarn docker:run
       ```
   1. hit the endpoint
       ```bash
-      export API_KEY=abc123 # must be a value you defined in the dev-start.sh file
-      curl -H "Authorization: $API_KEY" localhost:38080/wow-observations
+      export API_KEY=abc123 # must be a value you defined in the `.env` file
+      curl -H "Authorization: $API_KEY" localhost:3000/wow-observations
       ```
 
 # Useful links

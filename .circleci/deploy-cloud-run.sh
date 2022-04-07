@@ -4,9 +4,10 @@
 set -euxo pipefail
 cd "$(dirname "$0")"
 
-: ${GCP_SERVICE_NAME:-}
-: ${CUSTOM_DOMAIN:-}
-: ${IMAGE_FULL:-}
+: ${GCP_SERVICE_NAME}
+: ${CUSTOM_DOMAIN}
+: ${IMAGE_FULL}
+secretPrefix=${GCP_SECRET_PREFIX:?should be DEV_ or PROD_}
 
 source ./config-env.sh
 commonParams="--platform managed --region ${GOOGLE_COMPUTE_ZONE:?}"
@@ -16,14 +17,18 @@ function getSecret {
 }
 
 # build set-env-vars value in a more readable way
-ZZ=" INAT_API_PREFIX=$(getSecret INAT_API_PREFIX),"
-ZZ+="INAT_PREFIX=$(getSecret INAT_PREFIX),"
-ZZ+="INAT_PROJECT_SLUG=$(getSecret INAT_PROJECT_SLUG),"
-ZZ+="OAUTH_APP_ID=$(getSecret OAUTH_APP_ID),"
-ZZ+="OAUTH_APP_SECRET=$(getSecret OAUTH_APP_SECRET),"
-ZZ+="OAUTH_USERNAME=$(getSecret OAUTH_USERNAME),"
-ZZ+="OAUTH_PASSWORD=$(getSecret OAUTH_PASSWORD),"
-ZZ+="SENTRY_DSN=$(getSecret SENTRY_DSN),"
+ZZ=" INAT_API_PREFIX=$(getSecret ${secretPrefix}INAT_API_PREFIX),"
+ZZ+="INAT_PREFIX=$(getSecret ${secretPrefix}INAT_PREFIX),"
+ZZ+="INAT_PROJECT_SLUG=$(getSecret ${secretPrefix}INAT_PROJECT_SLUG),"
+ZZ+="OAUTH_APP_ID=$(getSecret ${secretPrefix}OAUTH_APP_ID),"
+ZZ+="OAUTH_APP_SECRET=$(getSecret ${secretPrefix}OAUTH_APP_SECRET),"
+ZZ+="OAUTH_USERNAME=$(getSecret ${secretPrefix}OAUTH_USERNAME),"
+ZZ+="OAUTH_PASSWORD=$(getSecret ${secretPrefix}OAUTH_PASSWORD),"
+ZZ+="SENTRY_DSN=$(getSecret ${secretPrefix}SENTRY_DSN),"
+ZZ+="GCS_BUCKET=$(getSecret ${secretPrefix}GCS_BUCKET),"
+# could use "--service-account fs-identity" but using GCP_KEY_JSON_BASE64
+# mirrors local dev, so we know it works and it'll be easier to debug problems
+ZZ+="GCP_KEY_JSON_BASE64=$(getSecret GCP_KEY_JSON_BASE64),"
 ZZ+="CLIENT1_API_KEY=$(getSecret CLIENT1_API_KEY),"
 ZZ+="CLIENT2_API_KEY=$(getSecret CLIENT2_API_KEY),"
 ZZ+="CLIENT3_API_KEY=$(getSecret CLIENT3_API_KEY),"
@@ -31,6 +36,7 @@ ZZ+="CLIENT4_API_KEY=$(getSecret CLIENT4_API_KEY)"
 
 gcloud beta run deploy $GCP_SERVICE_NAME \
   --image ${IMAGE_FULL:?} \
+  --execution-environment gen2 \
   $commonParams \
   --allow-unauthenticated \
   --set-env-vars $ZZ

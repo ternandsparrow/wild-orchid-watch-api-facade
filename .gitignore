@@ -1,11 +1,15 @@
+# legacy ignores
+dev-start.sh
+.env.local
+
+
+
 .DS_Store
 node_modules
 /dist
 /report
 
-# local env files
-.env.local
-.env.*.local
+.env
 
 # Log files
 npm-debug.log*
@@ -24,4 +28,4 @@ notes
 tags
 \#*\#
 *~
-dev-start.sh
+uploads

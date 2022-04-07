@@ -1,0 +1,39 @@
+#!/bin/bash
+# script to abstract common stuff to all docker commands we run
+set -euo pipefail
+cd "$(dirname "$0")"
+
+tagBase=${IMAGE_PREFIX:-ternandsparrow/wild-orchid-watch-api-facade}
+gitSha=$(git describe --match='' --always --abbrev=10 --dirty)
+
+function doRun {
+  envFile=.env
+  if [ -f $envFile ]; then
+    dotEnvParam='--env-file $envFile'
+  else
+    echo "[WARN] no $envFile found, things probably won't work"
+  fi
+  # thanks https://github.com/s3fs-fuse/s3fs-fuse/issues/647#issuecomment-637458150
+  permsForFuse="--cap-add SYS_ADMIN --device /dev/fuse --security-opt apparmor:unconfined"
+  docker run \
+    --rm \
+    -i \
+    -p 3000:3000 \
+    ${dotEnvParam:-} \
+    $permsForFuse \
+    -e BUCKET \
+    ${*:-} \
+    $tagBase:$gitSha
+}
+
+case ${1:?} in
+  build )
+    docker build --tag $tagBase:$gitSha --build-arg=GIT_SHA=$gitSha .
+    ;;
+  run )
+    doRun
+    ;;
+  shell )
+    doRun -t --entrypoint bash
+    ;;
+esac

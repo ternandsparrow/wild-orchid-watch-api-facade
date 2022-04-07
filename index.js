@@ -1,5 +1,14 @@
 const fs = require('fs')
 const fsP = require('fs/promises')
+const path = require('path')
+const log = {
+  debug: makeLogger('DEBUG', 'log'),
+  info: makeLogger('INFO', 'info'),
+  warn: makeLogger('WARN', 'warn'),
+  error: makeLogger('ERROR', 'error'),
+}
+
+require('dotenv').config()
 
 const FormData = require('form-data')
 const Sentry = require('@sentry/node')
@@ -8,24 +17,29 @@ const axios = require('axios')
 const cors = require('cors')
 const express = require('express')
 const formidable = require('formidable')
+const {CloudTasksClient} = require('@google-cloud/tasks')
 const wowLib = require('./src/lib.js')
 
 const app = express()
 const port = process.env.PORT || 3000
+const taskCallbackUrl = '/task-callback'
+// thanks https://ihateregex.io/expr/uuid/
+const uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/
 
-const apiBaseUrl = wowLib.stripTrailingSlashes(
-  getRequiredEnvVar('INAT_API_PREFIX'),
-)
-const inatBaseUrl = wowLib.stripTrailingSlashes(
-  getRequiredEnvVar('INAT_PREFIX'),
-)
-const gitSha = process.env.GIT_SHA || '(local dev)'
+const inatBaseUrl =
+  wowLib.getUrlEnvVar('INAT_PREFIX') || 'https://dev.inat.techotom.com'
+const apiBaseUrl =
+  wowLib.getUrlEnvVar('INAT_API_PREFIX') || 'https://dev.api.inat.techotom.com'
+const gitSha = process.env.GIT_SHA || '(nothing)'
+const rootUploadDirPath = process.env.UPLOAD_DIR_PATH || './uploads'
 
 // the WOW project. Slug is the fragment of URL, e.g. wow_project, not the
 // numeric ID.
-const inatProjectSlug = getRequiredEnvVar('INAT_PROJECT_SLUG')
+const inatProjectSlug =
+  process.env.INAT_PROJECT_SLUG || 'wow-dev2'
 
-const oauthAppId = getRequiredEnvVar('OAUTH_APP_ID')
+const oauthAppId = process.env.OAUTH_APP_ID ||
+  '1c0c5c9b05f181b7b59411b311c84cf4c134158e890a348cfa967e905b579c28'
 const oauthAppSecret = getRequiredEnvVar('OAUTH_APP_SECRET')
 // these login details must be for a user that is a curator/manager of the iNat
 // project as this role allows us to get unobscured GPS coordinates for
@@ -50,7 +64,7 @@ const allApiKeys = [
   const minKeyLength = 36
   if (curr.length < minKeyLength) {
     throw new Error(
-      `Config error: API key is shorter than min length (${minKeyLength}): '${curr}'`,
+      `Config error: API key is shorter than min length (${minKeyLength}): '${curr}'`
     )
   }
   accum.push(curr)
@@ -64,14 +78,21 @@ if (sentryDsn) {
     tracesSampleRate: 1.0,
   })
 } else {
-  console.warn('[WARN] No Sentry DSN provided, refusing to init Sentry client')
+  log.warn('[WARN] No Sentry DSN provided, refusing to init Sentry client')
 }
+
+// FIXME add these to .env.example and deploy script
+const gcpRegion = process.env.GCP_REGION || 'us-west1'
+const gcpProject = process.env.GCP_PROJECT
+const gcpQueue = process.env.GCP_QUEUE
+
+// FIXME split code into "data producers" and "data consumers"
 
 let outboundAuth = null
 
-const isDev = process.env.IS_DEV_MODE === 'true'
+const isDev = process.env.IS_DEV_MODE !== 'false'
 
-console.info(`WOW facade for iNat API
+log.info(`WOW facade for iNat API
   Upstream API:   ${apiBaseUrl}
   Upstream iNat:  ${inatBaseUrl}
   Project slug:   ${inatProjectSlug}
@@ -82,6 +103,10 @@ console.info(`WOW facade for iNat API
   OAuth pass:     ${oauthPassword}
   Git SHA:        ${gitSha}
   Sentry DSN:     ${sentryDsn}
+  Upload dir:     ${rootUploadDirPath}
+  GCP region:     ${gcpRegion}
+  GCP project:    ${gcpProject}
+  GCP queue:      ${gcpQueue}
   Dev mode:       ${isDev}`)
 
 app.get('/wow-observations', async (req, res) => {
@@ -94,7 +119,7 @@ app.get('/wow-observations', async (req, res) => {
     const apiKey = req.headers.authorization
     const isAuthorised = allApiKeys.includes(apiKey)
     if (!isAuthorised) {
-      infoLog('Rejecting unauthorised request with API key:', apiKey)
+      log.info('Rejecting unauthorised request with API key:', apiKey)
       const forbidden = 403
       return json(
         res,
@@ -106,16 +131,16 @@ app.get('/wow-observations', async (req, res) => {
         forbidden,
       )
     }
-    infoLog('Handling request from API key:', apiKey)
+    log.info('Handling request from API key:', apiKey)
     const authHeader = await getOutboundAuthHeader()
     res.set('Content-type', 'application/json')
     await streamInatGetToCaller(authHeader, req.query, res)
     const elapsed = Date.now() - startMs
-    infoLog(`Elapsed time ${elapsed}ms`)
+    log.info(`Elapsed time ${elapsed}ms`)
     return res.status(200).end()
   } catch (err) {
     Sentry.captureException(err)
-    console.error('Internal server error', err)
+    log.error('Internal server error', err)
     const body = { msg: 'Internal server error' }
     if (isDev) {
       body.devDetail = err.message
@@ -127,23 +152,37 @@ app.get('/wow-observations', async (req, res) => {
 })
 
 const obsCorsOptions = {methods: ['POST']}
-app.options('/observations', cors(obsCorsOptions))
 
-app.post('/observations', cors(obsCorsOptions), (req, res) => {
-  res.set('Content-type', 'application/json')
-  postHandler(req)
-    .then(({status, body}) => {
-      return res.status(status || 200).send(body)
-    })
-    .catch(err => {
-      // FIXME send to Sentry
-      console.error('Error while handling POST /observations', err)
-      res.status(500).send({error: 'The server exploded :('})
-    })
+const obsGetPath = '/inat-facade/observations'
+app.options(obsGetPath, cors(obsCorsOptions))
+
+app.get(obsGetPath, (req, res) => {
+  // FIXME implement endpoint for app to get observations, just a facade in
+  // front of inat
+  throw new Error('implement me')
 })
 
+const obsUploadPath = '/observations/:uuid'
+app.options(obsUploadPath, cors(obsCorsOptions))
+
+app.post(obsUploadPath, cors(obsCorsOptions), asyncHandler(postHandler))
+
 async function postHandler(req) {
-  // FIXME should we support ETag to detect duplicate uploads?
+  const startMs = Date.now()
+  const {uuid} = req.params
+  if (!uuid.match(uuidRegex)) {
+    return {
+      status: 400,
+      body: {error: `uuid path param is NOT valid`},
+    }
+  }
+  // FIXME should we support ETag or similar to detect duplicate uploads?
+  // FIXME should we roll our own resumable upload logic where the client can
+  //   query how much data the server has? probably requires an endpoint to
+  //   query/get upload URL and then uploads are done to that second URL. Not
+  //   sure if we can do it with one request. Maybe with websockets? Don't know
+  //   if service workers are aware of websockets or if they're treated the
+  //   same way.
   const expectedContentType = 'multipart/form-data'
   const isNotMultipart = !~(req.headers['content-type'] || '')
     .indexOf(expectedContentType)
@@ -161,14 +200,16 @@ async function postHandler(req) {
       body: {error: `Authorization must be provided`}
     }
   }
+  let userDetail = null
   try {
-    console.log(`Checking if supplied auth is valid: ${authHeader.substr(0,20)}...`)
+    log.debug(`Checking if supplied auth is valid: ${authHeader.substr(0,20)}...`)
     const resp = await axios.get(`${apiBaseUrl}/v1/users/me`, {
       headers: { Authorization: authHeader }
     })
-    infoLog('Auth from observations bundle is valid', resp.status)
+    log.info('Auth from observations bundle is valid', resp.status)
+    userDetail = resp.data?.results[0]
   } catch (err) {
-    infoLog('Verifying auth passed in observations bundle has failed!', err.response.status)
+    log.info('Verifying auth passed in observations bundle has failed!', err.response.status)
     return {
       status: 401,
       body: {
@@ -177,31 +218,30 @@ async function postHandler(req) {
       }
     }
   }
-  // FIXME try to parse files without writing to disk, just keep in memory
-  const form = formidable({ multiples: true })
-  const {fields, files} = await new Promise((resolve, reject) => {
-    form.parse(req, (err, fields, files) => {
-      if (err) {
-        return reject(err)
-      }
-      return resolve({fields, files})
-    })
-  })
+  const uploadDirPath = await setupUploadDirForThisUuid(uuid)
+  await formidableParse(uploadDirPath, req, userDetail)
   try {
-    const validationError = validate(fields, files)
+    const {files, fields} = await readManifest(uploadDirPath)
+    const validationError = await validate(fields, files, uuid)
     if (validationError) {
       return {
         status: 400,
         body: {message: validationError}
       }
     }
-    infoLog(`Handling request with ${Object.keys(fields).length} fields and ${
-      Object.keys(files).length} files`)
-    // FIXME should be async and triggered again if this server fails (durable trigger)
-    await uploadToInat(fields.projectId, files, authHeader)
-    // FIXME handle errors?
-    // FIXME respond to caller once files are saved (to GCP) and req is queued
-    return {body: { fields, files }} // FIXME
+    log.info(`Parsed and validated request with ${
+      Object.keys(fields).length} fields and ${Object.keys(files).length} files`)
+    const callbackUrl = `${req.protocol}://${req.headers.host}${callbackUrlSuffix}`
+    await scheduleGcpTask(callbackUrl)
+    const extra = isDev ? {fields, files} : {}
+    const callbackUrlSuffix = `${taskCallbackUrl}/${uuid}`
+    return {body: {
+      ...extra,
+      uuid,
+      callbackUrlSuffix,
+      callbackUrl,
+      elapsedMs: Date.now() - startMs,
+    }}
   } catch (err) {
     if (err.response) {
       const {status, data} = err.response
@@ -211,9 +251,58 @@ async function postHandler(req) {
       }
     }
     throw err
-  } finally {
-    await cleanup(files)
   }
+}
+
+async function formidableParse(uploadDirPath, req, userDetail) {
+  const form = formidable({
+    multiples: true,
+    uploadDir: uploadDirPath,
+  })
+  const {fields, files} = await new Promise((resolve, reject) => {
+    form.parse(req, (err, fields, files) => {
+      // FIXME does the memory usage go down after we've read the req body stream
+      if (err) {
+        return reject(err)
+      }
+      return resolve({fields, files})
+    })
+  })
+  await fsP.writeFile(
+    makeSemaphorePath(uploadDirPath),
+    req.headers['authorization']
+  )
+  const manifest = {
+    fields,
+    files,
+    user: {
+      login: userDetail.login,
+      email: userDetail.email,
+    },
+  }
+  await fsP.writeFile(
+    makeManifestPath(uploadDirPath),
+    JSON.stringify(manifest)
+  )
+}
+
+async function setupUploadDirForThisUuid(uuid) {
+  const uploadDirPath = makeUploadDirPath(uuid)
+  try {
+    await fsP.access(uploadDirPath)
+    log.debug(`Upload dir ${uploadDirPath} already exists, archiving...`)
+    const archivePath = path.join(rootUploadDirPath, `zarchive-${uuid}.${Date.now()}`)
+    await fsP.rename(uploadDirPath, archivePath)
+    log.debug(`Successfully archived to ${archivePath}`)
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      throw err
+    }
+  }
+  log.debug(`Creating empty upload dir ${uploadDirPath}...`)
+  await fsP.mkdir(uploadDirPath)
+  log.debug(`Upload dir ${uploadDirPath} successfully created`)
+  return uploadDirPath
 }
 
 function getPhotosFromFiles(files) {
@@ -222,7 +311,7 @@ function getPhotosFromFiles(files) {
 
 async function uploadToInat(projectId, files, authHeader) {
   const photos = getPhotosFromFiles(files)
-  infoLog(`Uploading ${photos.length} photos`)
+  log.info(`Uploading ${photos.length} photos`)
   // FIXME need to handle DELETE and adding photos to an existing obs
   const photoResps = await Promise.all(photos.map(p => {
     const form = new FormData()
@@ -242,7 +331,7 @@ async function uploadToInat(projectId, files, authHeader) {
   }))
   // FIXME catch image post error, like an image/* that iNat doesn't like
   const photoIds = photoResps.map(e => e.data.id)
-  infoLog(`Photo IDs from responses: ${photoIds}`)
+  log.info(`Photo IDs from responses: ${photoIds}`)
   const obsJson = JSON.parse(fs.readFileSync(files.observation.filepath))
   const obsBody = {
     observation: obsJson,
@@ -258,11 +347,11 @@ async function uploadToInat(projectId, files, authHeader) {
   const resp = await axios.post(`${apiBaseUrl}/v1/observations`, obsBody, {
     headers: { Authorization: authHeader }
   })
-  infoLog(`Response to creating obs: ${resp.status}`, resp.data)
+  log.info(`Response to creating obs: ${resp.status}`, resp.data)
 }
 
 app.get('/version', (req, res) => {
-  infoLog('Handling version endpoint')
+  log.info('Handling version endpoint')
   const result = {
     gitSha,
     upstream: {
@@ -274,8 +363,74 @@ app.get('/version', (req, res) => {
   return json(res, result, 200)
 })
 
+app.post(`${taskCallbackUrl}/:uuid`, asyncHandler(taskCallbackHandler))
+
+async function taskCallbackHandler(req) {
+  // FIXME need a shared secret for auth here
+  const startMs = Date.now()
+  const {uuid} = req.params // FIXME validate?
+  log.debug(`Processing task callback for ${uuid}`)
+  const uploadDirPath = makeUploadDirPath(uuid)
+  let authHeader
+  try {
+    authHeader = await fsP.readFile(makeSemaphorePath(uploadDirPath))
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return {body: {
+        isSuccess: true,
+        isProcessed: false, // it's already been processed previously
+        elapsedMs: Date.now() - startMs,
+      }}
+    }
+    throw err
+  }
+  const {files, fields} = await readManifest(uploadDirPath)
+  // FIXME validate authHeader
+  try {
+    log.debug(`Uploading ${uuid} to iNat`)
+    await uploadToInat(fields.projectId, files, authHeader)
+    log.debug(`Successfully uploaded ${uuid} to iNat, removing semaphore`)
+    await fsP.rm(makeSemaphorePath(uploadDirPath))
+    log.debug(`Semaphore for ${uuid} removed`)
+      return {body: {
+        isSuccess: true,
+        isProcessed: true,
+        elapsedMs: Date.now() - startMs,
+      }}
+  } catch (err) {
+    // FIXME might need to branch on resp code. 4xx is not worth retrying
+    const isRetry = true
+    // FIXME what status means retry, and which means don't bother retrying
+    const status = 500
+    const body = {isSuccess: false, isRetry, elapsedMs: Date.now() - startMs}
+    // GCP probably doesn't care about the body, but as a dev calling the
+    // endpoint, it's useful to know what happened
+    return {status, body}
+  }
+}
+
+;(() => { // eslint-disable-line no-extra-semi
+  try {
+    log.debug(`Asserting upload dir (${rootUploadDirPath}) exists`)
+    const d = fs.opendirSync(rootUploadDirPath)
+    d.close()
+    log.debug(`Upload dir DOES exist`)
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      log.warn('Upload dir does NOT exist, attemping to create...')
+      fs.mkdirSync(rootUploadDirPath)
+      log.warn('Upload dir successfully created')
+      return
+    }
+    if (err.code === 'ENOTDIR') {
+      throw new Error(`Upload dir path ${
+        rootUploadDirPath} exists, but it NOT a directory, cannot continue`)
+    }
+    throw err
+  }
+})()
 app.listen(port, () => {
-  console.log(`WOW API Facade listening on ${port}`)
+  log.info(`WOW API Facade listening on ${port}`)
 })
 
 function processStreamChunks(stream, chunkCallback) {
@@ -297,10 +452,10 @@ function processStreamChunks(stream, chunkCallback) {
  */
 async function getOutboundAuthHeader() {
   if (outboundAuth) {
-    infoLog('Using cached outbound auth header', outboundAuth)
+    log.info('Using cached outbound auth header', outboundAuth)
     return outboundAuth
   }
-  infoLog('No cached outbound auth header, renewing...')
+  log.info('No cached outbound auth header, renewing...')
   const accessTokenHeader = await (async () => {
     // We're using Resource Owner Password Credentials Flow.
     // Read more about this at https://www.inaturalist.org/pages/api+reference#auth
@@ -312,26 +467,31 @@ async function getOutboundAuthHeader() {
       password: oauthPassword,
     }
     const url = `${inatBaseUrl}/oauth/token`
-    const resp = await axios.post(url, payload)
-    if (resp.status !== 200) {
-      throw new Error(
-        `Failed to get OAuth token from iNat. Response status code=${resp.status}`,
-      )
-    }
-    infoLog(`New access token, response:`, resp.data)
-    const { access_token, token_type } = resp.data || {}
-    if (!access_token || !token_type) {
+    try {
+      const resp = await axios.post(url, payload)
+      if (resp.status !== 200) {
+        throw new Error(
+          `Failed to get OAuth token from iNat. Response status code=${resp.status}`,
+        )
+      }
+      log.info(`New access token, response:`, resp.data)
+      const { access_token, token_type } = resp.data || {}
+      if (!access_token || !token_type) {
+        throw new Error('Failed to get OAuth token from iNat. Resp was ' +
+          'successful, but body was missing data=' + JSON.stream(resp.data))
+      }
+      return `${token_type} ${access_token}`
+    } catch (err) {
       throw new Error(
         `Failed to get OAuth token from iNat. Resp status=${
-          resp.status
-        }, body: ${JSON.stringify(resp.data)}`,
+          err.response.status
+        }, body: ${JSON.stringify(err.response.data)}`,
       )
     }
-    return `${token_type} ${access_token}`
   })()
   outboundAuth = await (async () => {
     const url = `${inatBaseUrl}/users/api_token`
-    infoLog(
+    log.info(
       `Exchanging access token (${accessTokenHeader}) for API JWT at URL=${url}`,
     )
     const resp = await axios.get(url, {
@@ -354,10 +514,10 @@ async function getOutboundAuthHeader() {
         )}`,
       )
     }
-    infoLog(`New API JWT, response:`, resp.data)
+    log.info(`New API JWT, response:`, resp.data)
     return api_token
   })()
-  infoLog('Using new outbound auth header', outboundAuth)
+  log.info('Using new outbound auth header', outboundAuth)
   return outboundAuth
 }
 
@@ -375,7 +535,7 @@ async function streamInatGetToCaller(authHeader, inboundQuerystring, res) {
       },
       responseType: 'stream',
     })
-    infoLog(`HTTP GET ${url}\n` + `  SUCCESS ${resp.status}`)
+    log.info(`HTTP GET ${url}\n` + `  SUCCESS ${resp.status}`)
     await processStreamChunks(resp.data, (
       chunk /* chunk is an ArrayBuffer */,
     ) => {
@@ -405,7 +565,7 @@ async function streamInatGetToCaller(authHeader, inboundQuerystring, res) {
     if (err.isAxiosError && isDev) {
       throw new Error(`Axios error: ${msg}`)
     }
-    console.error(msg)
+    log.error(msg)
     throw err
   }
 }
@@ -425,16 +585,24 @@ function getRequiredEnvVar(varName) {
   return result
 }
 
-function infoLog(...args) {
-  console.info(new Date().toISOString(), '[INFO]', ...args)
+function makeLogger(levelTag, fnOnConsole) {
+  return function(...args) {
+  console[fnOnConsole](new Date().toISOString(), `[${levelTag}]`, ...args)
+}
 }
 
-function validate(fields, files) {
+async function validate(fields, files, uuid) {
   if (!files.observation) {
     return 'Must send an `observation` file containing JSON'
   }
   if (files.observation.mimetype !== 'application/json') {
     return '`observation` file must be `application/json`'
+  }
+  const obsRawBytes = await fsP.readFile(files.observation.filepath)
+  const observation = JSON.parse(obsRawBytes)
+  const obsUuid = observation.uuid
+  if (obsUuid !== uuid) {
+    return `UUID mismatch! "${uuid}" in URL path and "${obsUuid}" in body`
   }
   if (!fields.projectId) {
     return 'Must send a `projectId` numeric field'
@@ -449,14 +617,56 @@ function validate(fields, files) {
   if (!photos.every(e => e.mimetype.startsWith('image/'))) {
     return 'All `photos` files must have a `image/*` mime'
   }
-  // FIXME add other checks
+  // FIXME should we validate further, so HEIC, etc are disallowed?
 }
 
-function cleanup(files) {
-  return Promise.all(Object.values(files).map(curr => {
-    if (curr.constructor === Array) {
-      return Promise.all(curr.map(e => fsP.rm(e.filepath)))
-    }
-    return fsP.rm(curr.filepath)
-  }))
+function makeManifestPath(basePath) {
+  return path.join(basePath, 'manifest.json')
+}
+
+async function readManifest(basePath) {
+  const manifestRaw = await fsP.readFile(makeManifestPath(basePath))
+  return JSON.parse(manifestRaw)
+}
+
+function makeSemaphorePath(basePath) {
+  return path.join(basePath, 'semaphore.txt')
+}
+
+function makeUploadDirPath(uuid) {
+  return path.join(rootUploadDirPath, uuid)
+}
+
+function asyncHandler(workerFn) {
+  return function(req, res) {
+    res.set('Content-type', 'application/json')
+    workerFn(req)
+      .then(({status, body}) => {
+        return res.status(status || 200).send(body)
+      })
+      .catch(err => {
+        // FIXME send to Sentry
+        log.error(`Error while running function ${workerFn.name}`, err)
+        res.status(500).send({error: 'The server exploded :('})
+      })
+  }
+}
+
+async function scheduleGcpTask(url) {
+  if (!gcpProject || !gcpQueue) {
+    log.debug('GCP queue or project config missing, refusing to schedule task')
+    return
+  }
+  const client = new CloudTasksClient()
+  const parent = client.queuePath(gcpProject, gcpRegion, gcpQueue)
+  const task = {
+    httpRequest: {
+      httpMethod: 'POST',
+      url,
+      // FIXME can we set a header in here? Or just use body?
+    },
+  }
+  // task.httpRequest.body = Buffer.from(payload).toString('base64')
+  const request = {parent: parent, task: task}
+  await client.createTask(request)
 }

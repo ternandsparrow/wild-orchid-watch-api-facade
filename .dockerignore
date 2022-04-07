@@ -3,7 +3,11 @@
 .git
 .gitignore
 Dockerfile
-dev-start.sh
+dev-start.sh*
+docker-build.sh
 example-clients
 node_modules
 npm-debug.log
+tests/
+.env*
+yarn-error.log

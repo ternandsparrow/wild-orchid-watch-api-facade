@@ -15,7 +15,6 @@
   "dependencies": {
     "@google-cloud/tasks": "^2.5.0",
     "@sentry/node": "^5.26.0",
-    "@sentry/tracing": "^5.26.0",
     "axios": "^0.20.0",
     "cors": "^2.8.5",
     "dotenv": "^16.0.0",

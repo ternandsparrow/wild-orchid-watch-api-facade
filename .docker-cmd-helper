@@ -18,7 +18,7 @@ function doRun {
   docker run \
     --rm \
     -i \
-    -p 3000:3000 \
+    -p ${PORT:-3000}:3000 \
     ${dotEnvParam:-} \
     $permsForFuse \
     -e BUCKET \

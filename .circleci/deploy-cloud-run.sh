@@ -26,6 +26,9 @@ ZZ+="OAUTH_USERNAME=$(getSecret ${secretPrefix}OAUTH_USERNAME),"
 ZZ+="OAUTH_PASSWORD=$(getSecret ${secretPrefix}OAUTH_PASSWORD),"
 ZZ+="SENTRY_DSN=$(getSecret ${secretPrefix}SENTRY_DSN),"
 ZZ+="GCS_BUCKET=$(getSecret ${secretPrefix}GCS_BUCKET),"
+ZZ+="GCP_REGION=$(getSecret ${secretPrefix}GCP_REGION),"
+ZZ+="GCP_PROJECT=$(getSecret ${secretPrefix}GCP_PROJECT),"
+ZZ+="GCP_QUEUE=$(getSecret ${secretPrefix}GCP_QUEUE),"
 # could use "--service-account fs-identity" but using GCP_KEY_JSON_BASE64
 # mirrors local dev, so we know it works and it'll be easier to debug problems
 ZZ+="GCP_KEY_JSON_BASE64=$(getSecret GCP_KEY_JSON_BASE64),"

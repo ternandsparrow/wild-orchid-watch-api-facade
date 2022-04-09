@@ -15,5 +15,3 @@ gcsfuse --app-name wow-facade --debug_gcs --debug_fuse $GCS_BUCKET $UPLOAD_DIR_P
 echo "Mounting completed."
 
 node .
-
-# FIXME if we pass --env after --env-file, will it always clobber?

@@ -50,7 +50,7 @@ async function _obsPostHandler(req) {
   let userDetail = null
   try {
     log.debug(`Checking if supplied auth is valid: ${authHeader.substr(0,20)}...`)
-    const resp = await axios.get(`${wowConfig.apiBaseUrl}/v1/users/me`, {
+    const resp = await axios.get(`${wowConfig().apiBaseUrl}/v1/users/me`, {
       headers: { Authorization: authHeader }
     })
     log.info('Auth from observations bundle is valid', resp.status)
@@ -81,7 +81,7 @@ async function _obsPostHandler(req) {
     const callbackUrlSuffix = `${taskCallbackUrl}/${uuid}`
     const callbackUrl = `${req.protocol}://${req.headers.host}${callbackUrlSuffix}`
     await scheduleGcpTask(callbackUrl)
-    const extra = wowConfig.isDev ? {fields, files} : {}
+    const extra = wowConfig().isDev ? {fields, files} : {}
     return {body: {
       ...extra,
       uuid,
@@ -145,7 +145,7 @@ async function setupUploadDirForThisUuid(uuid) {
   try {
     await fsP.access(uploadDirPath)
     log.debug(`Upload dir ${uploadDirPath} already exists, archiving...`)
-    const archivePath = path.join(wowConfig.rootUploadDirPath, `zarchive-${uuid}.${Date.now()}`)
+    const archivePath = path.join(wowConfig().rootUploadDirPath, `zarchive-${uuid}.${Date.now()}`)
     await fsP.rename(uploadDirPath, archivePath)
     log.debug(`Successfully archived to ${archivePath}`)
   } catch (err) {
@@ -189,7 +189,7 @@ async function _taskCallbackHandler(req) {
     if (err.code === 'ENOENT') {
       return {body: {
         isSuccess: true,
-        isProcessed: false, // it's already been processed previously
+        wasProcessed: false, // it's already been processed previously
         elapsedMs: Date.now() - startMs,
       }}
     }
@@ -205,7 +205,7 @@ async function _taskCallbackHandler(req) {
     log.debug(`Semaphore for ${uuid} removed`)
       return {body: {
         isSuccess: true,
-        isProcessed: true,
+        wasProcessed: true,
         elapsedMs: Date.now() - startMs,
       }}
   } catch (err) {
@@ -270,7 +270,7 @@ async function uploadToInat(projectId, files, authHeader) {
       knownLength: p.size,
     })
     return axios.post(
-      `${wowConfig.apiBaseUrl}/v1/photos`,
+      `${wowConfig().apiBaseUrl}/v1/photos`,
       form,
       {
         headers: {
@@ -295,7 +295,7 @@ async function uploadToInat(projectId, files, authHeader) {
       projectId,
     ]
   }
-  const resp = await axios.post(`${wowConfig.apiBaseUrl}/v1/observations`, obsBody, {
+  const resp = await axios.post(`${wowConfig().apiBaseUrl}/v1/observations`, obsBody, {
     headers: { Authorization: authHeader }
   })
   log.info(`Response to creating obs with UUID=${obsJson.uuid}: ${resp.status}`)
@@ -317,20 +317,20 @@ function makeSemaphorePath(basePath) {
 }
 
 function makeUploadDirPath(uuid) {
-  return path.join(wowConfig.rootUploadDirPath, uuid)
+  return path.join(wowConfig().rootUploadDirPath, uuid)
 }
 
 async function scheduleGcpTask(url) {
-  if (!wowConfig.gcpProject || !wowConfig.gcpQueue) {
+  if (!wowConfig().gcpProject || !wowConfig().gcpQueue) {
     log.debug('GCP queue or project config missing, refusing to schedule ' +
       'task. Call it yourself by hand with curl.')
     return
   }
   const client = new CloudTasksClient()
   const parent = client.queuePath(
-    wowConfig.gcpProject,
-    wowConfig.gcpRegion,
-    wowConfig.gcpQueue
+    wowConfig().gcpProject,
+    wowConfig().gcpRegion,
+    wowConfig().gcpQueue
   )
   const task = {
     httpRequest: {

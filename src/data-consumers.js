@@ -13,7 +13,7 @@ module.exports.dataConsumerObservationsHandler = async function(req, res) {
   try {
     const startMs = Date.now()
     const apiKey = req.headers.authorization
-    const isAuthorised = wowConfig.allApiKeys.includes(apiKey)
+    const isAuthorised = wowConfig().allApiKeys.includes(apiKey)
     if (!isAuthorised) {
       log.info('Rejecting unauthorised request with API key:', apiKey)
       const forbidden = 403
@@ -38,7 +38,7 @@ module.exports.dataConsumerObservationsHandler = async function(req, res) {
     Sentry.captureException(err)
     log.error('Internal server error', err)
     const body = { msg: 'Internal server error' }
-    if (wowConfig.isDev) {
+    if (wowConfig().isDev) {
       body.devDetail = err.message
     }
     return json(res, body, 500)
@@ -60,13 +60,13 @@ async function getOutboundAuthHeader() {
     // We're using Resource Owner Password Credentials Flow.
     // Read more about this at https://www.inaturalist.org/pages/api+reference#auth
     const payload = {
-      client_id: wowConfig.oauthAppId,
-      client_secret: wowConfig.oauthAppSecret,
+      client_id: wowConfig().oauthAppId,
+      client_secret: wowConfig().oauthAppSecret,
       grant_type: 'password',
-      username: wowConfig.oauthUsername,
-      password: wowConfig.oauthPassword,
+      username: wowConfig().oauthUsername,
+      password: wowConfig().oauthPassword,
     }
-    const url = `${wowConfig.inatBaseUrl}/oauth/token`
+    const url = `${wowConfig().inatBaseUrl}/oauth/token`
     try {
       const resp = await axios.post(url, payload)
       if (resp.status !== 200) {
@@ -90,7 +90,7 @@ async function getOutboundAuthHeader() {
     }
   })()
   outboundAuth = await (async () => {
-    const url = `${wowConfig.inatBaseUrl}/users/api_token`
+    const url = `${wowConfig().inatBaseUrl}/users/api_token`
     log.info(
       `Exchanging access token (${accessTokenHeader}) for API JWT at URL=${url}`,
     )
@@ -122,10 +122,10 @@ async function getOutboundAuthHeader() {
 }
 
 async function streamInatGetToCaller(authHeader, inboundQuerystring, res) {
-  const url = `${wowConfig.apiBaseUrl}/v1/observations`
+  const url = `${wowConfig().apiBaseUrl}/v1/observations`
   const params = {
     ...inboundQuerystring,
-    project_id: wowConfig.inatProjectSlug,
+    project_id: wowConfig().inatProjectSlug,
   }
   try {
     const resp = await axios.get(url, {
@@ -162,7 +162,7 @@ async function streamInatGetToCaller(authHeader, inboundQuerystring, res) {
       `  FAILED ${status} (${statusText})\n` +
       `  Resp body: ${body}\n` +
       `  Error message: ${err.message} `
-    if (err.isAxiosError && wowConfig.isDev) {
+    if (err.isAxiosError && wowConfig().isDev) {
       throw new Error(`Axios error: ${msg}`)
     }
     log.error(msg)

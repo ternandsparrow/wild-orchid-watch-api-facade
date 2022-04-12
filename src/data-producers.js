@@ -174,6 +174,8 @@ function asyncHandler(workerFn) {
   }
 }
 
+// according to https://cloud.google.com/tasks/docs/tutorial-gcf
+// > Any status code other than 2xx or 503 will trigger the task to retry
 async function _taskCallbackHandler(req) {
   // FIXME need a shared secret for auth here
   const startMs = Date.now()
@@ -207,10 +209,13 @@ async function _taskCallbackHandler(req) {
         elapsedMs: Date.now() - startMs,
       }}
   } catch (err) {
+    log.error('Failed to upload to iNat', err)
     // FIXME might need to branch on resp code. 4xx is not worth retrying
-    const isRetry = true
-    // FIXME what status means retry, and which means don't bother retrying
-    const status = 500
+    // FIXME how do we tell GCP Tasks to *not* retry? Explicitly remove the
+    // task from the queue or just return success and raise the alarm
+    // elsewhere?
+    const isRetry = true // FIXME
+    const status = 500 // FIXME
     const body = {isSuccess: false, isRetry, elapsedMs: Date.now() - startMs}
     // GCP probably doesn't care about the body, but as a dev calling the
     // endpoint, it's useful to know what happened
@@ -258,12 +263,15 @@ async function uploadToInat(projectId, files, authHeader) {
   // FIXME need to handle DELETE and adding photos to an existing obs
   const photoResps = await Promise.all(photos.map(p => {
     const form = new FormData()
-    // FIXME do we need to include mime?
-    const fileBytes = fs.readFileSync(p.filepath)
-    form.append('file', fileBytes)
+    const fileStream = fs.createReadStream(p.filepath)
+    form.append('file', fileStream, {
+      filename: p.originalFilename,
+      contentType: p.mimetype,
+      knownLength: p.size,
+    })
     return axios.post(
       `${wowConfig.apiBaseUrl}/v1/photos`,
-      form.getBuffer(),
+      form,
       {
         headers: {
           ...form.getHeaders(),
@@ -290,7 +298,9 @@ async function uploadToInat(projectId, files, authHeader) {
   const resp = await axios.post(`${wowConfig.apiBaseUrl}/v1/observations`, obsBody, {
     headers: { Authorization: authHeader }
   })
-  log.info(`Response to creating obs: ${resp.status}`, resp.data)
+  log.info(`Response to creating obs with UUID=${obsJson.uuid}: ${resp.status}`)
+  // FIXME should we write this to GCS for debugging help?
+  log.trace('Response data:', resp.data)
 }
 
 function makeManifestPath(basePath) {

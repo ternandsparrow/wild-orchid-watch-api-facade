@@ -1,6 +1,6 @@
 #!/bin/bash
 # script to abstract common stuff to all docker commands we run
-set -euo pipefail
+set -euxo pipefail
 cd "$(dirname "$0")"
 
 tagBase=${IMAGE_PREFIX:-ternandsparrow/wild-orchid-watch-api-facade}
@@ -9,7 +9,7 @@ gitSha=$(git describe --match='' --always --abbrev=10 --dirty)
 function doRun {
   envFile=.env
   if [ -f $envFile ]; then
-    dotEnvParam='--env-file $envFile'
+    dotEnvParam="--env-file $envFile"
   else
     echo "[WARN] no $envFile found, things probably won't work"
   fi

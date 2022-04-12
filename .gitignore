@@ -3,7 +3,7 @@ dev-start.sh
 .env.local
 
 
-
+key.json
 .DS_Store
 node_modules
 /dist

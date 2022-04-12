@@ -34,7 +34,7 @@ jobs:
           name: Build Docker image
           command: |
             source .circleci/config-env.sh
-            bash docker-build.sh
+            ./.docker-cmd-helper build
       - gcp-gcr/gcr-auth:
           gcloud-service-key: GOOGLE_CLOUD_KEYS
           google-project-id: GOOGLE_PROJECT_ID

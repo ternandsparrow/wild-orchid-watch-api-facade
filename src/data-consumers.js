@@ -38,7 +38,7 @@ module.exports.dataConsumerObservationsHandler = async function(req, res) {
     Sentry.captureException(err)
     log.error('Internal server error', err)
     const body = { msg: 'Internal server error' }
-    if (wowConfig().isDev) {
+    if (wowConfig().isLocalDev) {
       body.devDetail = err.message
     }
     return json(res, body, 500)
@@ -162,7 +162,7 @@ async function streamInatGetToCaller(authHeader, inboundQuerystring, res) {
       `  FAILED ${status} (${statusText})\n` +
       `  Resp body: ${body}\n` +
       `  Error message: ${err.message} `
-    if (err.isAxiosError && wowConfig().isDev) {
+    if (err.isAxiosError && wowConfig().isLocalDev) {
       throw new Error(`Axios error: ${msg}`)
     }
     log.error(msg)

@@ -17,21 +17,21 @@ const app = express()
 const port = process.env.PORT || 3000
 
 log.info(`WOW facade for iNat API
-  Upstream API:   ${wowConfig.apiBaseUrl}
-  Upstream iNat:  ${wowConfig.inatBaseUrl}
-  Project slug:   ${wowConfig.inatProjectSlug}
-  API Keys:       ${JSON.stringify(wowConfig.allApiKeys)}
-  OAuth App ID:   ${wowConfig.oauthAppId}
-  OAuth Secret:   ${wowConfig.oauthAppSecret}
-  OAuth user:     ${wowConfig.oauthUsername}
-  OAuth pass:     ${wowConfig.oauthPassword}
-  Git SHA:        ${wowConfig.gitSha}
-  Sentry DSN:     ${wowConfig.sentryDsn}
-  Upload dir:     ${wowConfig.rootUploadDirPath}
-  GCP region:     ${wowConfig.gcpRegion}
-  GCP project:    ${wowConfig.gcpProject}
-  GCP queue:      ${wowConfig.gcpQueue}
-  Dev mode:       ${wowConfig.isDev}`)
+  Upstream API:   ${wowConfig().apiBaseUrl}
+  Upstream iNat:  ${wowConfig().inatBaseUrl}
+  Project slug:   ${wowConfig().inatProjectSlug}
+  API Keys:       ${JSON.stringify(wowConfig().allApiKeys)}
+  OAuth App ID:   ${wowConfig().oauthAppId}
+  OAuth Secret:   ${wowConfig().oauthAppSecret}
+  OAuth user:     ${wowConfig().oauthUsername}
+  OAuth pass:     ${wowConfig().oauthPassword}
+  Git SHA:        ${wowConfig().gitSha}
+  Sentry DSN:     ${wowConfig().sentryDsn}
+  Upload dir:     ${wowConfig().rootUploadDirPath}
+  GCP region:     ${wowConfig().gcpRegion}
+  GCP project:    ${wowConfig().gcpProject}
+  GCP queue:      ${wowConfig().gcpQueue}
+  Env name:       ${wowConfig().deployedEnvName}`)
 
 app.get('/wow-observations', dataConsumerObservationsHandler)
 
@@ -46,11 +46,12 @@ app.post(`${taskCallbackUrl}/:uuid`, taskCallbackHandler)
 app.get('/version', (req, res) => {
   log.info('Handling version endpoint')
   const result = {
-    gitSha: wowConfig.gitSha,
+    gitSha: wowConfig().gitSha,
+    envName: wowConfig().deployedEnvName,
     upstream: {
-      inat: wowConfig.inatBaseUrl,
-      inatApi: wowConfig.apiBaseUrl,
-      inatProjectSlug: wowConfig.inatProjectSlug,
+      inat: wowConfig().inatBaseUrl,
+      inatApi: wowConfig().apiBaseUrl,
+      inatProjectSlug: wowConfig().inatProjectSlug,
     },
   }
   return json(res, result, 200)

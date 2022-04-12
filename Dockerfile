@@ -25,7 +25,7 @@ WORKDIR $APP_HOME
 
 # split the deps install from other code for faster future builds
 COPY --chown=node package.json yarn.lock ./
-RUN yarn install --frozen-lockfile --prod
+RUN yarn install --frozen-lockfile --prod && yarn cache clean
 
 COPY --chown=node . .
 RUN chmod +x entrypoint.sh

@@ -16,19 +16,26 @@ function getSecret {
   gcloud secrets versions access latest --secret $1
 }
 
+function getOptionalSecret {
+  getSecret || echo ''
+}
+
+# FIXME we should do a Sentry release
+
 # build set-env-vars value in a more readable way
-ZZ=" INAT_API_PREFIX=$(getSecret ${secretPrefix}INAT_API_PREFIX),"
-ZZ+="INAT_PREFIX=$(getSecret ${secretPrefix}INAT_PREFIX),"
-ZZ+="INAT_PROJECT_SLUG=$(getSecret ${secretPrefix}INAT_PROJECT_SLUG),"
-ZZ+="OAUTH_APP_ID=$(getSecret ${secretPrefix}OAUTH_APP_ID),"
-ZZ+="OAUTH_APP_SECRET=$(getSecret ${secretPrefix}OAUTH_APP_SECRET),"
-ZZ+="OAUTH_USERNAME=$(getSecret ${secretPrefix}OAUTH_USERNAME),"
-ZZ+="OAUTH_PASSWORD=$(getSecret ${secretPrefix}OAUTH_PASSWORD),"
-ZZ+="SENTRY_DSN=$(getSecret ${secretPrefix}SENTRY_DSN),"
-ZZ+="GCS_BUCKET=$(getSecret ${secretPrefix}GCS_BUCKET),"
-ZZ+="GCP_REGION=$(getSecret ${secretPrefix}GCP_REGION),"
-ZZ+="GCP_PROJECT=$(getSecret ${secretPrefix}GCP_PROJECT),"
-ZZ+="GCP_QUEUE=$(getSecret ${secretPrefix}GCP_QUEUE),"
+ZZ=" INAT_API_PREFIX=$(  getOptionalSecret ${secretPrefix}INAT_API_PREFIX),"
+ZZ+="INAT_PREFIX=$(      getOptionalSecret ${secretPrefix}INAT_PREFIX),"
+ZZ+="INAT_PROJECT_SLUG=$(getOptionalSecret ${secretPrefix}INAT_PROJECT_SLUG),"
+ZZ+="OAUTH_APP_ID=$(     getOptionalSecret ${secretPrefix}OAUTH_APP_ID),"
+ZZ+="OAUTH_APP_SECRET=$( getSecret ${secretPrefix}OAUTH_APP_SECRET),"
+ZZ+="OAUTH_USERNAME=$(   getSecret ${secretPrefix}OAUTH_USERNAME),"
+ZZ+="OAUTH_PASSWORD=$(   getSecret ${secretPrefix}OAUTH_PASSWORD),"
+ZZ+="GCS_BUCKET=$(       getSecret ${secretPrefix}GCS_BUCKET),"
+ZZ+="GCP_QUEUE=$(        getSecret ${secretPrefix}GCP_QUEUE),"
+
+ZZ+="SENTRY_DSN=$(       getSecret SENTRY_DSN),"
+ZZ+="GCP_REGION=$(       getSecret GCP_REGION),"
+ZZ+="GCP_PROJECT=$(      getSecret GCP_PROJECT),"
 # could use "--service-account fs-identity" but using GCP_KEY_JSON_BASE64
 # mirrors local dev, so we know it works and it'll be easier to debug problems
 ZZ+="GCP_KEY_JSON_BASE64=$(getSecret GCP_KEY_JSON_BASE64),"

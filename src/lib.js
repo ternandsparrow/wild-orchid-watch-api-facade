@@ -15,6 +15,7 @@ function wowConfig() {
   if (cachedConfig) {
     return cachedConfig
   }
+  const localDevEnvName = 'local-dev'
   const result = {
     inatBaseUrl:
     getUrlEnvVar('INAT_PREFIX') || 'https://dev.inat.techotom.com',
@@ -34,14 +35,15 @@ function wowConfig() {
     //  for observations. This should be a dedicated user just for this use.
     oauthUsername: getRequiredEnvVar('OAUTH_USERNAME'),
     oauthPassword: getRequiredEnvVar('OAUTH_PASSWORD'),
-    isDev: process.env.IS_DEV_MODE !== 'false',
+    deployedEnvName: process.env.DEPLOYED_ENV_NAME || localDevEnvName,
     sentryDsn: process.env.SENTRY_DSN,
     gcpRegion: process.env.GCP_REGION || 'us-west1',
     gcpProject: process.env.GCP_PROJECT,
     gcpQueue: process.env.GCP_QUEUE,
   }
+  result.isLocalDev = result.deployedEnvName === localDevEnvName
 
-  if (!result.isDev) {
+  if (!result.isLocalDev) {
     const requiredProdConfig = ['gcpProject', 'gcpQueue']
     for (const curr of requiredProdConfig) {
       if (!result[curr]) {
@@ -78,8 +80,13 @@ function wowConfig() {
     Sentry.init({
       dsn: result.sentryDsn,
       tracesSampleRate: 1.0,
+      release: result.gitSha,
+      environment: result.deployedEnvName,
     })
   } else {
+    if (!result.isLocalDev) {
+      throw new Error('Sentry must be configured for deployed envs, it currently is not')
+    }
     log.warn('[WARN] No Sentry DSN provided, refusing to init Sentry client')
   }
 

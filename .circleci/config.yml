@@ -16,6 +16,10 @@ jobs:
           command: |
             yarn install --frozen-lockfile
       - run:
+          name: Lint code
+          command: |
+            yarn lint
+      - run:
           name: Run Tests
           command: |
             yarn test

@@ -102,7 +102,7 @@ async function _obsPostHandler(req) {
   }
 }
 
-async function _obsGetHandler(req) {
+async function _obsGetHandler(/*req FIXME*/) {
   // FIXME implement endpoint for app to get observations, just a facade in
   // front of inat. Do we actually need this, or is it safe to keep going
   // direct to inat?

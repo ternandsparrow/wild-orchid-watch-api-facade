@@ -16,6 +16,10 @@ function getEnvParam {
   local key=$1
   local prefix="${2:-}"
   val=$(gcloud secrets versions access latest --secret ${prefix}${key})
+  rc=$?
+  if [ $rc != 0 ]; then
+    return $rc
+  fi
   echo "${key}=${val},"
 }
 
@@ -52,6 +56,7 @@ gcloud beta run deploy $GCP_SERVICE_NAME \
   --execution-environment gen2 \
   $commonParams \
   --allow-unauthenticated \
+  --max-instances=2 \
   --set-env-vars $ZZ
 
 echo

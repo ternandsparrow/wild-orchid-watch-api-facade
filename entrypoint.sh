@@ -11,7 +11,8 @@ export UPLOAD_DIR_PATH=$UPLOAD_DIR_PATH_DOCKER
 echo "Mounting GCS Fuse."
 mkdir -p $UPLOAD_DIR_PATH
 # use "--foreground" to debug issues with gcsfuse
-gcsfuse --app-name wow-facade --debug_gcs --debug_fuse $GCS_BUCKET $UPLOAD_DIR_PATH
+gcsfuse --app-name wow-facade --debug_gcs --debug_fuse \
+  ${EXTRA_GCSFUSE_PARAMS:-} $GCS_BUCKET $UPLOAD_DIR_PATH
 echo "Mounting completed."
 
 node .

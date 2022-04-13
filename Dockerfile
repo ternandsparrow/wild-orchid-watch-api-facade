@@ -1,10 +1,9 @@
 FROM node:16-buster-slim
-ARG GIT_SHA
 
 RUN set -eux; \
   apt-get update -y \
-  && pkgs='gnupg curl' \
-  && apt-get install -y $pkgs \
+  && ephemeralPackages='gnupg curl' \
+  && apt-get install -y $ephemeralPackages \
   && debVersion=$(cat /etc/apt/sources.list | grep -v '^#' | head -n1 | cut -f3 -d' ') \
   && gcsFuseRepo=gcsfuse-${debVersion} \
   && echo "deb http://packages.cloud.google.com/apt $gcsFuseRepo main" | \
@@ -12,8 +11,8 @@ RUN set -eux; \
   && curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
     apt-key add - \
   && apt-get update \
-  && apt-get install -y gcsfuse tini \
-  && apt-get remove -y $pkgs \
+  && apt-get install -y gcsfuse tini strace \
+  && apt-get remove -y $ephemeralPackages \
   && apt-get -y autoremove \
   && apt-get clean \
   && gcsfuse --version
@@ -30,6 +29,7 @@ RUN yarn install --frozen-lockfile --prod && yarn cache clean
 COPY --chown=node . .
 RUN chmod +x entrypoint.sh
 
+ARG GIT_SHA
 ENV HOST=0.0.0.0  PORT=3000  GIT_SHA=${GIT_SHA}
 
 EXPOSE ${PORT}

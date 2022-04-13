@@ -12,37 +12,46 @@ secretPrefix=${GCP_SECRET_PREFIX:?should be DEV_ or PROD_}
 source ./config-env.sh
 commonParams="--platform managed --region ${GOOGLE_COMPUTE_ZONE:?}"
 
-function getSecret {
-  gcloud secrets versions access latest --secret $1
+function getEnvParam {
+  local key=$1
+  local prefix="${2:-}"
+  local sep=${3:-,}
+  if [ $sep = 'nocomma' ]; then
+    sep=''
+  fi
+  val=$(gcloud secrets versions access latest --secret $key)
+  echo "${key}=${val}${sep}"
 }
 
-function getOptionalSecret {
-  getSecret $1 || echo ''
+function getOptionalEnvParam {
+  local key=$1
+  local prefix="${2:-}"
+  getSecret $key $prefix || echo ''
 }
 
 # FIXME we should do a Sentry release, possibly using their docker image
 
 # build set-env-vars value in a more readable way
-ZZ=" INAT_API_PREFIX=$(  getOptionalSecret ${secretPrefix}INAT_API_PREFIX),"
-ZZ+="INAT_PREFIX=$(      getOptionalSecret ${secretPrefix}INAT_PREFIX),"
-ZZ+="INAT_PROJECT_SLUG=$(getOptionalSecret ${secretPrefix}INAT_PROJECT_SLUG),"
-ZZ+="OAUTH_APP_ID=$(     getOptionalSecret ${secretPrefix}OAUTH_APP_ID),"
-ZZ+="OAUTH_APP_SECRET=$( getSecret ${secretPrefix}OAUTH_APP_SECRET),"
-ZZ+="OAUTH_USERNAME=$(   getSecret ${secretPrefix}OAUTH_USERNAME),"
-ZZ+="OAUTH_PASSWORD=$(   getSecret ${secretPrefix}OAUTH_PASSWORD),"
-ZZ+="GCS_BUCKET=$(       getSecret ${secretPrefix}GCS_BUCKET),"
-ZZ+="GCP_QUEUE=$(        getSecret ${secretPrefix}GCP_QUEUE),"
+ZZ=" $(getOptionalEnvParam INAT_API_PREFIX ${secretPrefix})"
+ZZ+="$(getOptionalEnvParam INAT_PREFIX ${secretPrefix})"
+ZZ+="$(getOptionalEnvParam INAT_PROJECT_SLUG ${secretPrefix})"
+ZZ+="$(getOptionalEnvParam OAUTH_APP_ID ${secretPrefix})"
+ZZ+="$(getEnvParam OAUTH_APP_SECRET ${secretPrefix})"
+ZZ+="$(getEnvParam OAUTH_USERNAME ${secretPrefix})"
+ZZ+="$(getEnvParam OAUTH_PASSWORD ${secretPrefix})"
+ZZ+="$(getEnvParam GCS_BUCKET ${secretPrefix})"
+ZZ+="$(getEnvParam GCP_QUEUE ${secretPrefix})"
 
-ZZ+="SENTRY_DSN=$(       getSecret SENTRY_DSN),"
-ZZ+="GCP_REGION=$(       getSecret GCP_REGION),"
-ZZ+="GCP_PROJECT=$(      getSecret GCP_PROJECT),"
+ZZ+="$(getEnvParam SENTRY_DSN)"
+ZZ+="$(getEnvParam GCP_REGION)"
+ZZ+="$(getEnvParam GCP_PROJECT)"
 # could use "--service-account fs-identity" but using GCP_KEY_JSON_BASE64
 # mirrors local dev, so we know it works and it'll be easier to debug problems
-ZZ+="GCP_KEY_JSON_BASE64=$(getSecret GCP_KEY_JSON_BASE64),"
-ZZ+="CLIENT1_API_KEY=$(getSecret CLIENT1_API_KEY),"
-ZZ+="CLIENT2_API_KEY=$(getSecret CLIENT2_API_KEY),"
-ZZ+="CLIENT3_API_KEY=$(getSecret CLIENT3_API_KEY),"
-ZZ+="CLIENT4_API_KEY=$(getSecret CLIENT4_API_KEY)"
+ZZ+="$(getEnvParam GCP_KEY_JSON_BASE64)"
+ZZ+="$(getEnvParam CLIENT1_API_KEY)"
+ZZ+="$(getEnvParam CLIENT2_API_KEY)"
+ZZ+="$(getEnvParam CLIENT3_API_KEY)"
+ZZ+="$(getEnvParam CLIENT4_API_KEY 'nocomma')"
 
 gcloud beta run deploy $GCP_SERVICE_NAME \
   --image ${IMAGE_FULL:?} \

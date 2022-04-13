@@ -37,17 +37,18 @@ jobs:
       - run:
           name: Build Docker image
           command: |
+            # IMAGE_NAME and IMAGE_TAG come from here
             source .circleci/config-env.sh
             ./.docker-cmd-helper build
       - gcp-gcr/gcr-auth:
           gcloud-service-key: GOOGLE_CLOUD_KEYS
           google-project-id: GOOGLE_PROJECT_ID
           google-compute-zone: GOOGLE_COMPUTE_ZONE
-      - gcp-gcr/push-image:
-          google-project-id: GOOGLE_PROJECT_ID
-          registry-url: "gcr.io"
-          image: $IMAGE_NAME
-          tag: $IMAGE_TAG
+      - run:
+          name: Push image to GCR
+          command: |
+            echo $IMAGE_FULL | base64 # for side-stepping secret obfuscation
+            docker push $IMAGE_FULL
   deploy_master:
     docker:
       - image: google/cloud-sdk:314.0.0

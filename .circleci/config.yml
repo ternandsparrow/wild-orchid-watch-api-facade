@@ -47,7 +47,8 @@ jobs:
       - run:
           name: Push image to GCR
           command: |
-            echo $IMAGE_FULL | base64 -w0 # for side-stepping secret obfuscation
+            # print as base64 to side-step secret obfuscation; for debugging
+            echo $IMAGE_FULL | base64 -w0; echo ''
             docker push $IMAGE_FULL
   deploy_master:
     docker:
@@ -60,6 +61,7 @@ jobs:
       - run:
           name: Deploy to Cloud Run (master)
           command: |
+            source .circleci/config-env.sh
             export GCP_SERVICE_NAME=wow-api-facade
             export CUSTOM_DOMAIN=api-facade.wildorchidwatch.org
             export GCP_SECRET_PREFIX=PROD_
@@ -75,6 +77,7 @@ jobs:
       - run:
           name: Deploy to Cloud Run (dev)
           command: |
+            source .circleci/config-env.sh
             export GCP_SERVICE_NAME=dev-wow-api-facade
             export CUSTOM_DOMAIN=dev-api-facade.wildorchidwatch.org
             export GCP_SECRET_PREFIX=DEV_

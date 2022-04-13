@@ -20,7 +20,7 @@ function getOptionalSecret {
   getSecret || echo ''
 }
 
-# FIXME we should do a Sentry release
+# FIXME we should do a Sentry release, possibly using their docker image
 
 # build set-env-vars value in a more readable way
 ZZ=" INAT_API_PREFIX=$(  getOptionalSecret ${secretPrefix}INAT_API_PREFIX),"

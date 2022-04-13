@@ -30,6 +30,9 @@ case ${1:?} in
   build )
     docker build --tag $tagBase:$gitSha --build-arg=GIT_SHA=$gitSha .
     ;;
+  build_circleci )
+    docker build --tag $IMAGE_FULL --build-arg=GIT_SHA=$gitSha .
+    ;;
   run )
     doRun
     ;;

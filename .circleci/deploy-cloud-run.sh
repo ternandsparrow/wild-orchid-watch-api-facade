@@ -24,9 +24,7 @@ function getEnvParam {
 }
 
 function getOptionalEnvParam {
-  local key=$1
-  local prefix="${2:-}"
-  getSecret $key $prefix || echo ''
+  getEnvParam $* || echo ''
 }
 
 # FIXME we should do a Sentry release, possibly using their docker image
@@ -53,7 +51,7 @@ ZZ+="$(getEnvParam CLIENT2_API_KEY)"
 ZZ+="$(getEnvParam CLIENT3_API_KEY)"
 ZZ+="$(getEnvParam CLIENT4_API_KEY 'nocomma')"
 
-gcloud beta run deploy $GCP_SERVICE_NAME \
+gcloud run deploy $GCP_SERVICE_NAME \
   --image ${IMAGE_FULL:?} \
   --execution-environment gen2 \
   $commonParams \

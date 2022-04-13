@@ -25,7 +25,7 @@ jobs:
             yarn test
   build_push_image:
     docker:
-      - image: google/cloud-sdk:314.0.0
+      - image: google/cloud-sdk:381.0.0
         auth:
           username: $DOCKER_USERNAME
           password: $DOCKER_PASSWORD
@@ -52,7 +52,7 @@ jobs:
             docker push $IMAGE_FULL
   deploy_master:
     docker:
-      - image: google/cloud-sdk:314.0.0
+      - image: google/cloud-sdk:381.0.0
         auth:
           username: $DOCKER_USERNAME
           password: $DOCKER_PASSWORD
@@ -68,7 +68,7 @@ jobs:
             bash .circleci/deploy-cloud-run.sh
   deploy_dev:
     docker:
-      - image: google/cloud-sdk:314.0.0
+      - image: google/cloud-sdk:381.0.0
         auth:
           username: $DOCKER_USERNAME
           password: $DOCKER_PASSWORD

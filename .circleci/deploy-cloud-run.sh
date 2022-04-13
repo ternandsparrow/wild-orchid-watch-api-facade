@@ -15,12 +15,8 @@ commonParams="--platform managed --region ${GOOGLE_COMPUTE_ZONE:?}"
 function getEnvParam {
   local key=$1
   local prefix="${2:-}"
-  local sep=${3:-,}
-  if [ $sep = 'nocomma' ]; then
-    sep=''
-  fi
-  val=$(gcloud secrets versions access latest --secret $key)
-  echo "${key}=${val}${sep}"
+  val=$(gcloud secrets versions access latest --secret ${prefix}${key})
+  echo "${key}=${val},"
 }
 
 function getOptionalEnvParam {
@@ -49,9 +45,9 @@ ZZ+="$(getEnvParam GCP_KEY_JSON_BASE64)"
 ZZ+="$(getEnvParam CLIENT1_API_KEY)"
 ZZ+="$(getEnvParam CLIENT2_API_KEY)"
 ZZ+="$(getEnvParam CLIENT3_API_KEY)"
-ZZ+="$(getEnvParam CLIENT4_API_KEY 'nocomma')"
+ZZ+="$(getEnvParam CLIENT4_API_KEY | sed 's/,//')"
 
-gcloud run deploy $GCP_SERVICE_NAME \
+gcloud beta run deploy $GCP_SERVICE_NAME \
   --image ${IMAGE_FULL:?} \
   --execution-environment gen2 \
   $commonParams \

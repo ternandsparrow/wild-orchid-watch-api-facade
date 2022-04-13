@@ -41,7 +41,7 @@ ZZ+="$(getEnvParam GCS_BUCKET ${secretPrefix})"
 ZZ+="$(getEnvParam GCP_QUEUE ${secretPrefix})"
 
 ZZ+="$(getEnvParam SENTRY_DSN)"
-ZZ+="$(getEnvParam GCP_REGION)"
+ZZ+="$(getOptionalEnvParam GCP_REGION)"
 ZZ+="$(getEnvParam GCP_PROJECT)"
 # could use "--service-account fs-identity" but using GCP_KEY_JSON_BASE64
 # mirrors local dev, so we know it works and it'll be easier to debug problems

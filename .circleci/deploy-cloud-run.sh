@@ -17,7 +17,7 @@ function getSecret {
 }
 
 function getOptionalSecret {
-  getSecret || echo ''
+  getSecret $1 || echo ''
 }
 
 # FIXME we should do a Sentry release, possibly using their docker image

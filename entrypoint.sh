@@ -39,4 +39,7 @@ mkdir -p $UPLOAD_DIR_PATH
 doGcsfuse --debug_gcs --debug_fuse || helpDebugGcsfuse
 echo "Mounting completed."
 
+# FIXME using fuse as a non-root user should work; it's the whole point! It
+# doesn't seem to though. So we're forced to run as root :'(
+
 node .

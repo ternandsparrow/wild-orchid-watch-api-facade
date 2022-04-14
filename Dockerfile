@@ -17,7 +17,7 @@ RUN set -eux; \
   && apt-get clean \
   && gcsfuse --version
 
-USER node
+# USER node FIXME try to drop privs but have mounted file with right perms
 ENV APP_HOME=/home/node/app  UPLOAD_DIR_PATH_DOCKER=/home/node/gcs
 RUN mkdir -p $APP_HOME $UPLOAD_DIR_PATH_DOCKER
 WORKDIR $APP_HOME

@@ -21,13 +21,16 @@ function doGcsfuse {
 
 function helpDebugGcsfuse {
   set +e
+  # get the strace output first, as it's long and we want the relevant (easier
+  # to parse) logs as the newest lines
+  PREFIX_CMD='strace -f' doGcsfuse
   id
   groups
+  uname -a
   ls -l $(dirname $UPLOAD_DIR_PATH)
   ls -l /dev/fuse
-  # get the strace output
-  PREFIX_CMD='strace -f' doGcsfuse
-  # get just the gcsfuse logging, so it's easier to read
+  ls -l $(which fusermount)
+  set -e
   doGcsfuse --foreground
 }
 

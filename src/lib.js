@@ -3,6 +3,7 @@ require('dotenv').config()
 const Sentry = require('@sentry/node')
 
 const log = {
+  trace: makeLogger('TRACE', 'trace'),
   debug: makeLogger('DEBUG', 'log'),
   info: makeLogger('INFO', 'info'),
   warn: makeLogger('WARN', 'warn'),

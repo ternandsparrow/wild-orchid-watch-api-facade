@@ -79,7 +79,10 @@ async function _obsPostHandler(req) {
     log.info(`Parsed and validated request with ${
       Object.keys(fields).length} fields and ${Object.keys(files).length} files`)
     const callbackUrlSuffix = `${taskCallbackUrl}/${uuid}`
-    const callbackUrl = `${req.protocol}://${req.headers.host}${callbackUrlSuffix}`
+    const callbackUrl = (()=> {
+      const protocol = wowConfig().isLocalDev ? req.protocol : 'https'
+      return `${protocol}://${req.headers.host}${callbackUrlSuffix}`
+    })()
     await scheduleGcpTask(callbackUrl)
     const extra = wowConfig().isLocalDev ? {fields, files} : {}
     return {body: {
@@ -184,6 +187,7 @@ async function _taskCallbackHandler(req) {
   const uploadDirPath = makeUploadDirPath(uuid)
   let authHeader
   try {
+    log.debug(`Reading auth header for ${uuid}`)
     authHeader = await fsP.readFile(makeSemaphorePath(uploadDirPath))
   } catch (err) {
     if (err.code === 'ENOENT') {
@@ -195,12 +199,13 @@ async function _taskCallbackHandler(req) {
     }
     throw err
   }
+  log.debug(`Reading manifest for ${uuid}`)
   const {files, fields} = await readManifest(uploadDirPath)
   // FIXME validate authHeader
   try {
     log.debug(`Uploading ${uuid} to iNat`)
     await uploadToInat(fields.projectId, files, authHeader)
-    log.debug(`Successfully uploaded ${uuid} to iNat, removing semaphore`)
+    log.info(`Successfully uploaded ${uuid} to iNat, removing semaphore`)
     await fsP.rm(makeSemaphorePath(uploadDirPath))
     log.debug(`Semaphore for ${uuid} removed`)
       return {body: {
@@ -339,9 +344,10 @@ async function scheduleGcpTask(url) {
       // FIXME can we set a header in here? Or just use body?
     },
   }
-  // task.httpRequest.body = Buffer.from(payload).toString('base64')
+  log.debug(`Scheduling callback task for ${url}`)
   const request = {parent: parent, task: task}
   await client.createTask(request)
+  log.debug('Task scheduled')
 }
 
 module.exports = {

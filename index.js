@@ -16,7 +16,8 @@ const {
 const app = express()
 const port = process.env.PORT || 3000
 
-log.info(`WOW facade for iNat API
+if (wowConfig().isLocalDev) {
+  log.debug(`WOW facade for iNat API
   Upstream API:   ${wowConfig().apiBaseUrl}
   Upstream iNat:  ${wowConfig().inatBaseUrl}
   Project slug:   ${wowConfig().inatProjectSlug}
@@ -32,6 +33,8 @@ log.info(`WOW facade for iNat API
   GCP project:    ${wowConfig().gcpProject}
   GCP queue:      ${wowConfig().gcpQueue}
   Env name:       ${wowConfig().deployedEnvName}`)
+}
+log.info(`Started; running ${wowConfig().gitSha}`)
 
 app.get('/wow-observations', dataConsumerObservationsHandler)
 

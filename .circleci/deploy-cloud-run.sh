@@ -29,6 +29,14 @@ function getOptionalEnvParam {
 
 # FIXME we should do a Sentry release, possibly using their docker image
 
+# FIXME we can use the built-in secret mechanism described here
+# https://cloud.google.com/run/docs/configuring/secrets#command-line, it uses
+# this param for the deploy command:
+#   --update-secrets=VAR_NAME1=SECRET_NAME:VERSION,VAR_NAME2=SECRET_NAME:VERSION
+# can mix env vars with secrets depending on sensitivity. Need to add perm to
+# deployer role so they can access secrets.
+
+
 # build set-env-vars value in a more readable way
 ZZ=" $(getOptionalEnvParam INAT_API_PREFIX ${secretPrefix})"
 ZZ+="$(getOptionalEnvParam INAT_PREFIX ${secretPrefix})"
@@ -39,6 +47,7 @@ ZZ+="$(getEnvParam OAUTH_USERNAME ${secretPrefix})"
 ZZ+="$(getEnvParam OAUTH_PASSWORD ${secretPrefix})"
 ZZ+="$(getEnvParam GCS_BUCKET ${secretPrefix})"
 ZZ+="$(getEnvParam GCP_QUEUE ${secretPrefix})"
+ZZ+="DEPLOYED_ENV_NAME=${DEPLOYED_ENV_NAME},"
 
 ZZ+="$(getEnvParam SENTRY_DSN)"
 ZZ+="$(getOptionalEnvParam GCP_REGION)"

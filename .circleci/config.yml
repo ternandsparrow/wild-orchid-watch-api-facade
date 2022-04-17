@@ -65,6 +65,7 @@ jobs:
             export GCP_SERVICE_NAME=wow-api-facade
             export CUSTOM_DOMAIN=api-facade.wildorchidwatch.org
             export GCP_SECRET_PREFIX=PROD_
+            export DEPLOYED_ENV_NAME=production
             bash .circleci/deploy-cloud-run.sh
   deploy_dev:
     docker:
@@ -81,6 +82,7 @@ jobs:
             export GCP_SERVICE_NAME=dev-wow-api-facade
             export CUSTOM_DOMAIN=dev-api-facade.wildorchidwatch.org
             export GCP_SECRET_PREFIX=DEV_
+            export DEPLOYED_ENV_NAME=development
             bash .circleci/deploy-cloud-run.sh
 workflows:
   dev:

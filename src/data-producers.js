@@ -79,8 +79,7 @@ async function _obsPostHandler(req) {
     log.info(`Parsed and validated request with ${
       Object.keys(fields).length} fields and ${Object.keys(files).length} files`)
     const callbackUrlSuffix = `${taskCallbackUrl}/${uuid}`
-    // const callbackUrl = `${req.protocol}://${req.headers.host}${callbackUrlSuffix}`
-    const callbackUrl = 'http://147.182.253.150:3000' // FIXME revert
+    const callbackUrl = `${req.protocol}://${req.headers.host}${callbackUrlSuffix}`
     await scheduleGcpTask(callbackUrl)
     const extra = wowConfig().isLocalDev ? {fields, files} : {}
     return {body: {

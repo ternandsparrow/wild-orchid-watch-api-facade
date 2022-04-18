@@ -3,7 +3,6 @@ const express = require('express')
 const {json, log, wowConfig} = require('./src/lib.js')
 const {dataConsumerObservationsHandler} = require('./src/data-consumers.js')
 const {
-  obsGetHandler,
   obsPostHandler,
   taskCallbackHandler,
 } = require('./src/data-producers.js')

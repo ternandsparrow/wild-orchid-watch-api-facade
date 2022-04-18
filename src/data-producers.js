@@ -178,7 +178,7 @@ async function _taskCallbackHandler(req) {
   // FIXME need a shared secret for auth here
   const startMs = Date.now()
   const {uuid, seq} = req.params // FIXME validate?
-  log.debug(`Processing task callback for ${uuid}, seq=${seq}`)
+  log.info(`Processing task callback for ${uuid}, seq=${seq}`)
   const uploadDirPath = makeUploadDirPath(uuid, seq)
   let authHeader
   const semaphorePath = makeSemaphorePath(uploadDirPath)
@@ -204,14 +204,16 @@ async function _taskCallbackHandler(req) {
     const newObsDataPath = path.join(uploadDirPath, 'new-obs.json')
     log.debug(`Writing new obs data to file: ${newObsDataPath}`)
     await fsP.writeFile(newObsDataPath, JSON.stringify(newObsData))
-    log.info(`Successfully uploaded ${uuid} to iNat, removing semaphore`)
+    log.debug(`New obs data written, removing semaphore for ${uuid}`)
     await fsP.rm(semaphorePath)
     log.debug(`Semaphore for ${uuid} removed`)
-      return {body: {
-        isSuccess: true,
-        wasProcessed: true,
-        elapsedMs: Date.now() - startMs,
-      }}
+    const elapsedMs = Date.now() - startMs
+    log.info(`Successfully uploaded ${uuid}; ID=${newObsData.id}; took ${elapsedMs}ms`)
+    return {body: {
+      isSuccess: true,
+      wasProcessed: true,
+      elapsedMs,
+    }}
   } catch (err) {
     log.error('Failed to upload to iNat', err)
     // FIXME might need to branch on resp code. 4xx is not worth retrying
@@ -263,7 +265,7 @@ function getPhotosFromFiles(files) {
 
 async function uploadToInat(projectId, files, authHeader) {
   const photos = getPhotosFromFiles(files)
-  log.info(`Uploading ${photos.length} photos`)
+  log.debug(`Uploading ${photos.length} photos`)
   // FIXME need to handle DELETE and adding photos to an existing obs
   const photoResps = await Promise.all(photos.map(p => {
     const form = new FormData()
@@ -286,7 +288,7 @@ async function uploadToInat(projectId, files, authHeader) {
   }))
   // FIXME catch image post error, like an image/* that iNat doesn't like
   const photoIds = photoResps.map(e => e.data.id)
-  log.info(`Photo IDs from responses: ${photoIds}`)
+  log.debug(`Photo IDs from responses: ${photoIds}`)
   const obsJson = JSON.parse(fs.readFileSync(files.observation.filepath))
   const obsBody = {
     observation: obsJson,
@@ -302,7 +304,7 @@ async function uploadToInat(projectId, files, authHeader) {
   const resp = await axios.post(`${wowConfig().apiBaseUrl}/v1/observations`, obsBody, {
     headers: { Authorization: authHeader }
   })
-  log.info(`Response to creating obs with UUID=${obsJson.uuid}: ${resp.status}`)
+  log.debug(`iNat response status: ${resp.status}`)
   return resp.data
 }
 

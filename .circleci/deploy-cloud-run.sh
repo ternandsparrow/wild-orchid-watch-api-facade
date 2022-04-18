@@ -36,6 +36,7 @@ function getOptionalEnvParam {
 # can mix env vars with secrets depending on sensitivity. Need to add perm to
 # deployer role so they can access secrets.
 
+# FIXME could mount GCP JSON key as a file, so we don't have to base64 decode
 
 # build set-env-vars value in a more readable way
 ZZ=" $(getOptionalEnvParam INAT_API_PREFIX ${secretPrefix})"
@@ -47,12 +48,13 @@ ZZ+="$(getEnvParam OAUTH_USERNAME ${secretPrefix})"
 ZZ+="$(getEnvParam OAUTH_PASSWORD ${secretPrefix})"
 ZZ+="$(getEnvParam GCS_BUCKET ${secretPrefix})"
 ZZ+="$(getEnvParam GCP_QUEUE ${secretPrefix})"
+ZZ+="$(getOptionalEnvParam LOG_LEVEL ${secretPrefix})"
 ZZ+="DEPLOYED_ENV_NAME=${DEPLOYED_ENV_NAME},"
 
 ZZ+="$(getEnvParam SENTRY_DSN)"
 ZZ+="$(getOptionalEnvParam GCP_REGION)"
 ZZ+="$(getEnvParam GCP_PROJECT)"
-# could use "--service-account fs-identity" but using GCP_KEY_JSON_BASE64
+# could use "--service-account <some iam role>" but using GCP_KEY_JSON_BASE64
 # mirrors local dev, so we know it works and it'll be easier to debug problems
 ZZ+="$(getEnvParam GCP_KEY_JSON_BASE64)"
 ZZ+="$(getEnvParam CLIENT1_API_KEY)"
@@ -65,6 +67,7 @@ gcloud beta run deploy $GCP_SERVICE_NAME \
   --execution-environment gen2 \
   $commonParams \
   --allow-unauthenticated \
+  --revision-suffix=${IMAGE_TAG:?} \
   --max-instances=2 \
   --set-env-vars $ZZ
 

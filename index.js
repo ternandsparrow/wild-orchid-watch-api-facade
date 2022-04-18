@@ -8,7 +8,6 @@ const {
   taskCallbackHandler,
 } = require('./src/data-producers.js')
 const {
-  obsGetPath,
   obsUploadPath,
   taskCallbackUrl,
 } = require('./src/routes.js')
@@ -34,17 +33,14 @@ if (wowConfig().isLocalDev) {
   GCP queue:      ${wowConfig().gcpQueue}
   Env name:       ${wowConfig().deployedEnvName}`)
 }
-log.info(`Started; running ${wowConfig().gitSha}`)
+log.info(`Started; running version ${wowConfig().gitSha}`)
 
 app.get('/wow-observations', dataConsumerObservationsHandler)
-
-app.options(obsGetPath, cors({methods: ['GET']}))
-app.get(obsGetPath, cors({methods: ['GET']}), obsGetHandler)
 
 app.options(obsUploadPath, cors({methods: ['POST']}))
 app.post(obsUploadPath, cors({methods: ['POST']}), obsPostHandler)
 
-app.post(`${taskCallbackUrl}/:uuid`, taskCallbackHandler)
+app.post(`${taskCallbackUrl}/:uuid/:seq`, taskCallbackHandler)
 
 app.get('/version', (req, res) => {
   log.info('Handling version endpoint')
@@ -61,5 +57,5 @@ app.get('/version', (req, res) => {
 })
 
 app.listen(port, () => {
-  log.info(`WOW API Facade listening on ${port}`)
+  log.info(`WOW API Facade listening on port ${port}`)
 })

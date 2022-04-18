@@ -2,9 +2,11 @@ const fs = require('fs')
 require('dotenv').config()
 const Sentry = require('@sentry/node')
 
+const noop = function() {}
+const logLevel = process.env.LOG_LEVEL || 'INFO'
 const log = {
-  trace: makeLogger('TRACE', 'trace'),
-  debug: makeLogger('DEBUG', 'log'),
+  trace: logLevel === 'TRACE' ? makeLogger('TRACE', 'log') : noop,
+  debug: ['TRACE', 'DEBUG'].includes(logLevel) ? makeLogger('DEBUG', 'log') : noop,
   info: makeLogger('INFO', 'info'),
   warn: makeLogger('WARN', 'warn'),
   error: makeLogger('ERROR', 'error'),

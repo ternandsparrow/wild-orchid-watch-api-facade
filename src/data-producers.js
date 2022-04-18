@@ -23,6 +23,7 @@ async function _obsPostHandler(req) {
       body: {error: `uuid path param is NOT valid`},
     }
   }
+  log.info(`Handling obs POST for ${uuid}`)
   // FIXME should we support ETag or similar to detect duplicate uploads?
   // FIXME should we roll our own resumable upload logic where the client can
   //   query how much data the server has? probably requires an endpoint to
@@ -65,7 +66,7 @@ async function _obsPostHandler(req) {
       }
     }
   }
-  const uploadDirPath = await setupUploadDirForThisUuid(uuid)
+  const {uploadDirPath, uploadSeq} = await setupUploadDirForThisUuid(uuid)
   await formidableParse(uploadDirPath, req, userDetail)
   try {
     const {files, fields} = await readManifest(uploadDirPath)
@@ -78,11 +79,12 @@ async function _obsPostHandler(req) {
     }
     log.info(`Parsed and validated request with ${
       Object.keys(fields).length} fields and ${Object.keys(files).length} files`)
-    const callbackUrlSuffix = `${taskCallbackUrl}/${uuid}`
+    const callbackUrlSuffix = `${taskCallbackUrl}/${uuid}/${uploadSeq}`
     const callbackUrl = (()=> {
       const protocol = wowConfig().isLocalDev ? req.protocol : 'https'
       return `${protocol}://${req.headers.host}${callbackUrlSuffix}`
     })()
+    log.debug(`Callback URL will be: ${callbackUrl}`)
     await scheduleGcpTask(callbackUrl)
     const extra = wowConfig().isLocalDev ? {fields, files} : {}
     return {body: {
@@ -102,13 +104,6 @@ async function _obsPostHandler(req) {
     }
     throw err
   }
-}
-
-async function _obsGetHandler(/*req FIXME*/) {
-  // FIXME implement endpoint for app to get observations, just a facade in
-  // front of inat. Do we actually need this, or is it safe to keep going
-  // direct to inat?
-  throw new Error('implement me')
 }
 
 async function formidableParse(uploadDirPath, req, userDetail) {
@@ -144,13 +139,13 @@ async function formidableParse(uploadDirPath, req, userDetail) {
 }
 
 async function setupUploadDirForThisUuid(uuid) {
-  const uploadDirPath = makeUploadDirPath(uuid)
+  const seq = Date.now()
+  const uploadDirPath = makeUploadDirPath(uuid, seq)
   try {
     await fsP.access(uploadDirPath)
-    log.debug(`Upload dir ${uploadDirPath} already exists, archiving...`)
-    const archivePath = path.join(wowConfig().rootUploadDirPath, `zarchive-${uuid}.${Date.now()}`)
-    await fsP.rename(uploadDirPath, archivePath)
-    log.debug(`Successfully archived to ${archivePath}`)
+    // FIXME we shouldn't have collisions, but we could iterate until we find a
+    // dir name that is not taken
+    throw new Error('Upload dir collision')
   } catch (err) {
     if (err.code !== 'ENOENT') {
       throw err
@@ -159,7 +154,7 @@ async function setupUploadDirForThisUuid(uuid) {
   log.debug(`Creating empty upload dir ${uploadDirPath}...`)
   await fsP.mkdir(uploadDirPath)
   log.debug(`Upload dir ${uploadDirPath} successfully created`)
-  return uploadDirPath
+  return {uploadDirPath, uploadSeq: seq}
 }
 
 function asyncHandler(workerFn) {
@@ -182,13 +177,14 @@ function asyncHandler(workerFn) {
 async function _taskCallbackHandler(req) {
   // FIXME need a shared secret for auth here
   const startMs = Date.now()
-  const {uuid} = req.params // FIXME validate?
-  log.debug(`Processing task callback for ${uuid}`)
-  const uploadDirPath = makeUploadDirPath(uuid)
+  const {uuid, seq} = req.params // FIXME validate?
+  log.debug(`Processing task callback for ${uuid}, seq=${seq}`)
+  const uploadDirPath = makeUploadDirPath(uuid, seq)
   let authHeader
+  const semaphorePath = makeSemaphorePath(uploadDirPath)
   try {
     log.debug(`Reading auth header for ${uuid}`)
-    authHeader = await fsP.readFile(makeSemaphorePath(uploadDirPath))
+    authHeader = await fsP.readFile(semaphorePath)
   } catch (err) {
     if (err.code === 'ENOENT') {
       return {body: {
@@ -204,9 +200,12 @@ async function _taskCallbackHandler(req) {
   // FIXME validate authHeader
   try {
     log.debug(`Uploading ${uuid} to iNat`)
-    await uploadToInat(fields.projectId, files, authHeader)
+    const newObsData = await uploadToInat(fields.projectId, files, authHeader)
+    const newObsDataPath = path.join(uploadDirPath, 'new-obs.json')
+    log.debug(`Writing new obs data to file: ${newObsDataPath}`)
+    await fsP.writeFile(newObsDataPath, JSON.stringify(newObsData))
     log.info(`Successfully uploaded ${uuid} to iNat, removing semaphore`)
-    await fsP.rm(makeSemaphorePath(uploadDirPath))
+    await fsP.rm(semaphorePath)
     log.debug(`Semaphore for ${uuid} removed`)
       return {body: {
         isSuccess: true,
@@ -219,9 +218,9 @@ async function _taskCallbackHandler(req) {
     // FIXME how do we tell GCP Tasks to *not* retry? Explicitly remove the
     // task from the queue or just return success and raise the alarm
     // elsewhere?
-    const isRetry = true // FIXME
+    const canRetry = true // FIXME compute this
     const status = 500 // FIXME
-    const body = {isSuccess: false, isRetry, elapsedMs: Date.now() - startMs}
+    const body = {isSuccess: false, canRetry, elapsedMs: Date.now() - startMs}
     // GCP probably doesn't care about the body, but as a dev calling the
     // endpoint, it's useful to know what happened
     return {status, body}
@@ -304,8 +303,7 @@ async function uploadToInat(projectId, files, authHeader) {
     headers: { Authorization: authHeader }
   })
   log.info(`Response to creating obs with UUID=${obsJson.uuid}: ${resp.status}`)
-  // FIXME should we write this to GCS for debugging help?
-  log.trace('Response data:', resp.data)
+  return resp.data
 }
 
 function makeManifestPath(basePath) {
@@ -321,8 +319,8 @@ function makeSemaphorePath(basePath) {
   return path.join(basePath, 'semaphore.txt')
 }
 
-function makeUploadDirPath(uuid) {
-  return path.join(wowConfig().rootUploadDirPath, uuid)
+function makeUploadDirPath(uuid, seq) {
+  return path.join(wowConfig().rootUploadDirPath, `${uuid}.${seq}`)
 }
 
 async function scheduleGcpTask(url) {
@@ -351,7 +349,6 @@ async function scheduleGcpTask(url) {
 }
 
 module.exports = {
-  obsGetHandler: asyncHandler(_obsGetHandler),
   obsPostHandler: asyncHandler(_obsPostHandler),
   taskCallbackHandler: asyncHandler(_taskCallbackHandler),
 }

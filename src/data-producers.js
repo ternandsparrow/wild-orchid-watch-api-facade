@@ -14,8 +14,9 @@ const {taskCallbackUrl} = require('./routes.js')
 // thanks https://ihateregex.io/expr/uuid/
 const uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/
 
-async function _obsPostHandler(req) {
+async function _obsHandler(req, validateFn) {
   const startMs = Date.now()
+  const httpMethod = req.method
   const {uuid} = req.params
   if (!uuid.match(uuidRegex)) {
     return {
@@ -23,7 +24,7 @@ async function _obsPostHandler(req) {
       body: {error: `uuid path param is NOT valid`},
     }
   }
-  log.info(`Handling obs POST for ${uuid}`)
+  log.info(`Handling obs ${httpMethod} for ${uuid}`)
   // FIXME should we support ETag or similar to detect duplicate uploads?
   // FIXME should we roll our own resumable upload logic where the client can
   //   query how much data the server has? probably requires an endpoint to
@@ -70,7 +71,7 @@ async function _obsPostHandler(req) {
   await formidableParse(uploadDirPath, req, userDetail)
   try {
     const {files, fields} = await readManifest(uploadDirPath)
-    const validationError = await validate(fields, files, uuid)
+    const validationError = await validateFn(fields, files, uuid)
     if (validationError) {
       return {
         status: 400,
@@ -84,15 +85,18 @@ async function _obsPostHandler(req) {
       const protocol = wowConfig().isLocalDev ? req.protocol : 'https'
       return `${protocol}://${req.headers.host}${callbackUrlSuffix}`
     })()
-    log.debug(`Callback URL will be: ${callbackUrl}`)
-    await scheduleGcpTask(callbackUrl)
+    log.debug(`Callback URL will be: ${httpMethod} ${callbackUrl}`)
+    await scheduleGcpTask(httpMethod, callbackUrl)
     const extra = wowConfig().isLocalDev ? {fields, files} : {}
+    const elapsedMs = Date.now() - startMs
+    log.info(`Elapsed ${elapsedMs}ms`)
     return {body: {
       ...extra,
       uuid,
+      callbackMethod: httpMethod,
       callbackUrlSuffix,
       callbackUrl,
-      elapsedMs: Date.now() - startMs,
+      elapsedMs,
     }}
   } catch (err) {
     if (err.response) {
@@ -157,10 +161,10 @@ async function setupUploadDirForThisUuid(uuid) {
   return {uploadDirPath, uploadSeq: seq}
 }
 
-function asyncHandler(workerFn) {
+function asyncHandler(workerFn, ...extraParams) {
   return function(req, res) {
     res.set('Content-type', 'application/json')
-    workerFn(req)
+    workerFn(req, ...extraParams)
       .then(({status, body}) => {
         return res.status(status || 200).send(body)
       })
@@ -174,7 +178,7 @@ function asyncHandler(workerFn) {
 
 // according to https://cloud.google.com/tasks/docs/tutorial-gcf
 // > Any status code other than 2xx or 503 will trigger the task to retry
-async function _taskCallbackHandler(req) {
+async function _taskCallbackHandler(req, sendToUpstreamFn) {
   // FIXME need a shared secret for auth here
   const startMs = Date.now()
   const {uuid, seq} = req.params // FIXME validate?
@@ -200,15 +204,15 @@ async function _taskCallbackHandler(req) {
   // FIXME validate authHeader
   try {
     log.debug(`Uploading ${uuid} to iNat`)
-    const newObsData = await uploadToInat(fields.projectId, files, authHeader)
-    const newObsDataPath = path.join(uploadDirPath, 'new-obs.json')
-    log.debug(`Writing new obs data to file: ${newObsDataPath}`)
-    await fsP.writeFile(newObsDataPath, JSON.stringify(newObsData))
-    log.debug(`New obs data written, removing semaphore for ${uuid}`)
+    const upstreamRespBody = await sendToUpstreamFn(fields, files, authHeader)
+    const upstreamRespBodyPath = path.join(uploadDirPath, 'new-obs.json')
+    log.debug(`Writing upstream resp body to file: ${upstreamRespBodyPath}`)
+    await fsP.writeFile(upstreamRespBodyPath, JSON.stringify(upstreamRespBody))
+    log.debug(`Upstream resp body written, removing semaphore for ${uuid}`)
     await fsP.rm(semaphorePath)
     log.debug(`Semaphore for ${uuid} removed`)
     const elapsedMs = Date.now() - startMs
-    log.info(`Successfully uploaded ${uuid}; ID=${newObsData.id}; took ${elapsedMs}ms`)
+    log.info(`Successfully processed ${uuid}; ID=${upstreamRespBody.id}; took ${elapsedMs}ms`)
     return {body: {
       isSuccess: true,
       wasProcessed: true,
@@ -229,7 +233,26 @@ async function _taskCallbackHandler(req) {
   }
 }
 
-async function validate(fields, files, uuid) {
+function validatePost(fields, files, uuid) {
+  if (!fields.projectId) {
+    return 'Must send a `projectId` numeric field'
+  }
+  if (isNaN(fields.projectId)) {
+    return '`projectId` must be a numeric field'
+  }
+  if (!files.photos) {
+    return 'Must send `photos` field'
+  }
+  return _validate(fields, files, uuid)
+}
+
+function validatePut(...params) {
+  // FIXME validate photo IDs to delete
+  // FIXME validate obs field IDs to delete
+  return _validate(...params)
+}
+
+async function _validate(fields, files, uuid) {
   if (!files.observation) {
     return 'Must send an `observation` file containing JSON'
   }
@@ -242,15 +265,6 @@ async function validate(fields, files, uuid) {
   if (obsUuid !== uuid) {
     return `UUID mismatch! "${uuid}" in URL path and "${obsUuid}" in body`
   }
-  if (!fields.projectId) {
-    return 'Must send a `projectId` numeric field'
-  }
-  if (isNaN(fields.projectId)) {
-    return '`projectId` must be a numeric field'
-  }
-  if (!files.photos) {
-    return 'Must send `photos` field'
-  }
   const photos = getPhotosFromFiles(files)
   if (!photos.every(e => e.mimetype.startsWith('image/'))) {
     return 'All `photos` files must have a `image/*` mime'
@@ -258,15 +272,17 @@ async function validate(fields, files, uuid) {
   // FIXME should we validate further, so HEIC, etc are disallowed?
 }
 
-
 function getPhotosFromFiles(files) {
-  return files.photos.constructor === Array ? files.photos : [files.photos]
+  const photos = files.photos
+  if (!photos) {
+    return []
+  }
+  return photos.constructor === Array ? files.photos : [files.photos]
 }
 
-async function uploadToInat(projectId, files, authHeader) {
+async function createInatObs({projectId}, files, authHeader) {
   const photos = getPhotosFromFiles(files)
   log.debug(`Uploading ${photos.length} photos`)
-  // FIXME need to handle DELETE and adding photos to an existing obs
   const photoResps = await Promise.all(photos.map(p => {
     const form = new FormData()
     const fileStream = fs.createReadStream(p.filepath)
@@ -304,7 +320,66 @@ async function uploadToInat(projectId, files, authHeader) {
   const resp = await axios.post(`${wowConfig().apiBaseUrl}/v1/observations`, obsBody, {
     headers: { Authorization: authHeader }
   })
-  log.debug(`iNat response status: ${resp.status}`)
+  log.debug(`iNat response status for ${uuid}: ${resp.status}`)
+  return resp.data
+}
+
+async function updateInatObs(fields, files, authHeader) {
+  const obsJson = JSON.parse(fs.readFileSync(files.observation.filepath))
+  const inatRecordId = obsJson.id
+  if (!inatRecordId) {
+    log.error('Dumping observation JSON for error', obsJson)
+    throw new Error(`Could not find inat ID`)
+  }
+  const photos = getPhotosFromFiles(files)
+  log.debug(`Processing ${photos.length} photos`)
+  await Promise.all(photos.map(p => {
+    const form = new FormData()
+    const fileStream = fs.createReadStream(p.filepath)
+    form.append('observation_photo[observation_id]', inatRecordId)
+    form.append('file', fileStream, {
+      filename: p.originalFilename,
+      contentType: p.mimetype,
+      knownLength: p.size,
+    })
+    return axios.post(
+      `${wowConfig().apiBaseUrl}/v1/observation_photos`,
+      form,
+      {
+        headers: {
+          ...form.getHeaders(),
+          Authorization: authHeader,
+        }
+      }
+    )
+  }))
+  const photoIdsToDelete = JSON.parse(fields['photos-delete'])
+  await Promise.all(photoIdsToDelete.map(id => {
+    log.debug(`Deleting photo ${id}`)
+    return axios.delete(
+      `${wowConfig().apiBaseUrl}/v1/observation_photos/${id}`,
+      { headers: { Authorization: authHeader } }
+    )
+  }))
+  const obsFieldIdsToDelete = JSON.parse(fields['obsFields-delete'])
+  await Promise.all(obsFieldIdsToDelete.map(id => {
+    log.debug(`Deleting obs field ${id}`)
+    return axios.delete(
+      `${wowConfig().apiBaseUrl}/v1/observation_field_values/${id}`,
+      { headers: { Authorization: authHeader } }
+    )
+  }))
+  log.debug(`Updating observation with ID=${inatRecordId}`)
+  const resp = await axios.put(
+    `${wowConfig().apiBaseUrl}/v1/observations/${inatRecordId}`,
+    {
+      // note: obs fields *not* included here are *not* implicitly deleted.
+      observation: obsJson,
+      ignore_photos: true,
+    },
+    { headers: { Authorization: authHeader } }
+  )
+  log.debug(`iNat response status for ${inatRecordId}: ${resp.status}`)
   return resp.data
 }
 
@@ -325,7 +400,7 @@ function makeUploadDirPath(uuid, seq) {
   return path.join(wowConfig().rootUploadDirPath, `${uuid}.${seq}`)
 }
 
-async function scheduleGcpTask(url) {
+async function scheduleGcpTask(httpMethod, url) {
   if (!wowConfig().gcpProject || !wowConfig().gcpQueue) {
     log.debug('GCP queue or project config missing, refusing to schedule ' +
       'task. Call it yourself by hand with curl.')
@@ -339,7 +414,7 @@ async function scheduleGcpTask(url) {
   )
   const task = {
     httpRequest: {
-      httpMethod: 'POST',
+      httpMethod,
       url,
       // FIXME can we set a header in here? Or just use body?
     },
@@ -351,6 +426,8 @@ async function scheduleGcpTask(url) {
 }
 
 module.exports = {
-  obsPostHandler: asyncHandler(_obsPostHandler),
-  taskCallbackHandler: asyncHandler(_taskCallbackHandler),
+  obsPostHandler: asyncHandler(_obsHandler, validatePost),
+  obsPutHandler: asyncHandler(_obsHandler, validatePut),
+  taskCallbackPostHandler: asyncHandler(_taskCallbackHandler, createInatObs),
+  taskCallbackPutHandler: asyncHandler(_taskCallbackHandler, updateInatObs),
 }

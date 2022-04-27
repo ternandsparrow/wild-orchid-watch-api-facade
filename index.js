@@ -4,7 +4,9 @@ const {json, log, wowConfig} = require('./src/lib.js')
 const {dataConsumerObservationsHandler} = require('./src/data-consumers.js')
 const {
   obsPostHandler,
-  taskCallbackHandler,
+  obsPutHandler,
+  taskCallbackPostHandler,
+  taskCallbackPutHandler,
 } = require('./src/data-producers.js')
 const {
   obsUploadPath,
@@ -36,10 +38,13 @@ log.info(`Started; running version ${wowConfig().gitSha}`)
 
 app.get('/wow-observations', dataConsumerObservationsHandler)
 
-app.options(obsUploadPath, cors({methods: ['POST']}))
-app.post(obsUploadPath, cors({methods: ['POST']}), obsPostHandler)
+const corsMiddleware = cors({methods: ['POST', 'PUT']})
+app.options(obsUploadPath, corsMiddleware)
+app.post(obsUploadPath, corsMiddleware, obsPostHandler)
+app.put(obsUploadPath, corsMiddleware, obsPutHandler)
 
-app.post(`${taskCallbackUrl}/:uuid/:seq`, taskCallbackHandler)
+app.post(`${taskCallbackUrl}/:uuid/:seq`, taskCallbackPostHandler)
+app.put(`${taskCallbackUrl}/:uuid/:seq`, taskCallbackPutHandler)
 
 app.get('/version', (req, res) => {
   log.info('Handling version endpoint')

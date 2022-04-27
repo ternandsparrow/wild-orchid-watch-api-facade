@@ -320,7 +320,7 @@ async function createInatObs({projectId}, files, authHeader) {
   const resp = await axios.post(`${wowConfig().apiBaseUrl}/v1/observations`, obsBody, {
     headers: { Authorization: authHeader }
   })
-  log.debug(`iNat response status for ${uuid}: ${resp.status}`)
+  log.debug(`iNat response status for ${obsJson.uuid}: ${resp.status}`)
   return resp.data
 }
 

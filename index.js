@@ -1,18 +1,22 @@
 const cors = require('cors')
 const express = require('express')
-const {json, log, wowConfig} = require('./src/lib.js')
+const {json, log, taskCallbackUrlPrefix, wowConfig} = require('./src/lib.js')
 const {dataConsumerObservationsHandler} = require('./src/data-consumers.js')
 const {
+  obsDeleteStatusHandler,
   obsPostHandler,
   obsPutHandler,
+  obsTaskStatusHandler,
   taskCallbackPostHandler,
   taskCallbackPutHandler,
+  authMiddleware: userAuthMiddleware,
 } = require('./src/data-producers.js')
-const {
-  obsUploadPath,
-  taskCallbackUrl,
-} = require('./src/routes.js')
 
+const uuidPathMatcher = ':uuid([0-9a-fA-F-]+)'
+const seqPathMatcher = ':seq([0-9]+)'
+const obsUploadUrl = `/observations/${uuidPathMatcher}`
+const deleteStatusUrl = `/task-status/:inatId([0-9]+)/delete`
+const otherStatusUrl = `/task-status/${uuidPathMatcher}/${seqPathMatcher}`
 const app = express()
 const port = process.env.PORT || 3000
 
@@ -39,12 +43,24 @@ log.info(`Started; running version ${wowConfig().gitSha}`)
 app.get('/wow-observations', dataConsumerObservationsHandler)
 
 const corsMiddleware = cors({methods: ['POST', 'PUT']})
-app.options(obsUploadPath, corsMiddleware)
-app.post(obsUploadPath, corsMiddleware, obsPostHandler)
-app.put(obsUploadPath, corsMiddleware, obsPutHandler)
+app.options(obsUploadUrl, corsMiddleware)
+app.options(deleteStatusUrl, corsMiddleware)
+app.options(otherStatusUrl, corsMiddleware)
 
-app.post(`${taskCallbackUrl}/:uuid/:seq`, taskCallbackPostHandler)
-app.put(`${taskCallbackUrl}/:uuid/:seq`, taskCallbackPutHandler)
+// create an observation
+app.post(obsUploadUrl, corsMiddleware, userAuthMiddleware, obsPostHandler)
+// update an observation
+app.put(obsUploadUrl, corsMiddleware, userAuthMiddleware, obsPutHandler)
+
+// poll upstream to see if delete has happened
+app.get(deleteStatusUrl, corsMiddleware, obsDeleteStatusHandler)
+// poll progress of create or update task
+app.get(otherStatusUrl, corsMiddleware, userAuthMiddleware, obsTaskStatusHandler)
+
+// endpoint for task queue to call, for "create obs" tasks
+app.post(`${taskCallbackUrlPrefix}/${uuidPathMatcher}/${seqPathMatcher}`, taskCallbackPostHandler)
+// endpoint for task queue to call, for "update obs" tasks
+app.put(`${taskCallbackUrlPrefix}/${uuidPathMatcher}/${seqPathMatcher}`, taskCallbackPutHandler)
 
 app.get('/version', (req, res) => {
   log.info('Handling version endpoint')

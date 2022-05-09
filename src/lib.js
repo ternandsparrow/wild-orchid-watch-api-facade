@@ -149,10 +149,11 @@ function getRequiredEnvVar(varName) {
 }
 
 module.exports = {
+  Sentry,
   getUrlEnvVar,
   json,
   log,
-  Sentry,
   stripTrailingSlashes,
+  taskCallbackUrlPrefix: '/task-callback',
   wowConfig,
 }

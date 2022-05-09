@@ -4,21 +4,74 @@ const fs = require('fs')
 const fsP = require('fs/promises')
 const path = require('path')
 
-const axios = require('axios')
+const realAxios = require('axios')
 const FormData = require('form-data')
 const formidable = require('formidable')
 const {CloudTasksClient} = require('@google-cloud/tasks')
-const {log, wowConfig} = require('./lib.js')
-const {taskCallbackUrl} = require('./routes.js')
+const {log, taskCallbackUrlPrefix, wowConfig} = require('./lib.js')
 
-// thanks https://ihateregex.io/expr/uuid/
-const uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/
+async function _obsTaskStatusHandler(req) {
+  // FIXME need auth here because we return sensitive data
+  const {uuid, seq} = req.params
+  if (!isUuid(uuid)) {
+    return {
+      status: 400,
+      body: {error: `uuid path param is NOT valid`},
+    }
+  }
+  // FIXME validate seq
+  const uploadDirPath = makeUploadDirPath(uuid, seq)
+  if (!(await isPathExists(uploadDirPath))) {
+    return {
+      status: 404,
+      body: {error: `uuid and seq combination does not exist`},
+    }
+  }
+  const [taskStatus, upstreamBody] = await (async () => {
+    const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
+    try {
+      const upstreamBody = await readJsonFile(upstreamRespBodyPath)
+      return ['success', upstreamBody]
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        // FIXME how do we indicate failure? Write a "terminal-error.log" file?
+        return ['processing', null]
+      }
+      throw new err
+    }
+  })()
+  return {body: {
+    taskStatus,
+    upstreamBody,
+    req: {
+      uuid,
+      seq,
+    },
+  }}
+}
 
-async function _obsHandler(req, validateFn) {
-  const startMs = Date.now()
+async function _obsDeleteStatusHandler(req, {axios, apiBaseUrl}) {
+  // not enforcing auth because we don't provide any sensitive data; anyone can
+  // see if an observation exists
+  const inatId = parseInt(req.params.inatId)
+  // FIXME validate param
+  const resp = await axios.get(`${apiBaseUrl}/v1/observations/${inatId}`)
+  const totalResults = resp.data.total_results
+  const taskStatus = totalResults > 0 ? 'processing' : 'success'
+  // FIXME is there a possible 'failure' status? How would we check? I don't
+  //  think there is because the client sends the delete direct to iNat, so we
+  //  can only have an error here, which does *not* indicate failure, just that
+  //  the client should try later.
+  return {body: {
+    taskStatus,
+    totalResults,
+  }}
+}
+
+async function _obsHandler(req, { axios, apiBaseUrl, isLocalDev, validateFn }) {
   const httpMethod = req.method
   const {uuid} = req.params
-  if (!uuid.match(uuidRegex)) {
+  if (!isUuid(uuid)) {
     return {
       status: 400,
       body: {error: `uuid path param is NOT valid`},
@@ -41,32 +94,7 @@ async function _obsHandler(req, validateFn) {
       body: {error: `Can only handle ${expectedContentType}`}
     }
   }
-  const authHeader = req.headers['authorization']
-  // FIXME could check it looks like a JWT
-  if (!authHeader) {
-    return {
-      status: 401,
-      body: {error: `Authorization must be provided`}
-    }
-  }
-  let userDetail = null
-  try {
-    log.debug(`Checking if supplied auth is valid: ${authHeader.substr(0,20)}...`)
-    const resp = await axios.get(`${wowConfig().apiBaseUrl}/v1/users/me`, {
-      headers: { Authorization: authHeader }
-    })
-    log.info('Auth from observations bundle is valid', resp.status)
-    userDetail = resp.data?.results[0]
-  } catch (err) {
-    log.info('Verifying auth passed in observations bundle has failed!', err.response.status)
-    return {
-      status: 401,
-      body: {
-        error: 'Authorization was rejected by upstream iNat server',
-        upstreamError: err.response.data,
-      }
-    }
-  }
+  let { userDetail } = req
   const {uploadDirPath, uploadSeq} = await setupUploadDirForThisUuid(uuid)
   await formidableParse(uploadDirPath, req, userDetail)
   try {
@@ -80,23 +108,25 @@ async function _obsHandler(req, validateFn) {
     }
     log.info(`Parsed and validated request with ${
       Object.keys(fields).length} fields and ${Object.keys(files).length} files`)
-    const callbackUrlSuffix = `${taskCallbackUrl}/${uuid}/${uploadSeq}`
-    const callbackUrl = (()=> {
-      const protocol = wowConfig().isLocalDev ? req.protocol : 'https'
-      return `${protocol}://${req.headers.host}${callbackUrlSuffix}`
+    const commonUrlSuffix = `${uuid}/${uploadSeq}`
+    const serverUrlPrefix = (()=> {
+      const protocol = isLocalDev ? req.protocol : 'https'
+      return `${protocol}://${req.headers.host}`
     })()
+    const callbackUrl = `${serverUrlPrefix}${taskCallbackUrlPrefix}/${commonUrlSuffix}`
     log.debug(`Callback URL will be: ${httpMethod} ${callbackUrl}`)
+    const statusUrl = `${serverUrlPrefix}${taskCallbackUrlPrefix}/${commonUrlSuffix}`
+    log.debug(`Status URL will be: GET ${callbackUrl}`)
     await scheduleGcpTask(httpMethod, callbackUrl)
-    const extra = wowConfig().isLocalDev ? {fields, files} : {}
-    const elapsedMs = Date.now() - startMs
-    log.info(`Elapsed ${elapsedMs}ms`)
+    const extra = isLocalDev ? {fields, files} : {}
     return {body: {
       ...extra,
       uuid,
-      callbackMethod: httpMethod,
-      callbackUrlSuffix,
-      callbackUrl,
-      elapsedMs,
+      statusUrl,
+      queuedTaskDetails: {
+        callbackMethod: httpMethod,
+        callbackUrl,
+      },
     }}
   } catch (err) {
     if (err.response) {
@@ -131,6 +161,7 @@ async function formidableParse(uploadDirPath, req, userDetail) {
   const manifest = {
     fields,
     files,
+    method: req.method,
     user: {
       login: userDetail.login,
       email: userDetail.email,
@@ -163,10 +194,22 @@ async function setupUploadDirForThisUuid(uuid) {
 
 function asyncHandler(workerFn, ...extraParams) {
   return function(req, res) {
+    const startMs = Date.now()
     res.set('Content-type', 'application/json')
-    workerFn(req, ...extraParams)
+    const wowContext = {
+      ...extraParams,
+      axios: realAxios,
+      ...wowConfig(),
+    }
+    workerFn(req, wowContext)
       .then(({status, body}) => {
-        return res.status(status || 200).send(body)
+        const elapsedMs = Date.now() - startMs
+        const respBody = {
+          ...body,
+          elapsedMs,
+        }
+        log.debug(`Elapsed ${elapsedMs}ms`)
+        return res.status(status || 200).send(respBody)
       })
       .catch(err => {
         // FIXME send to Sentry
@@ -178,9 +221,8 @@ function asyncHandler(workerFn, ...extraParams) {
 
 // according to https://cloud.google.com/tasks/docs/tutorial-gcf
 // > Any status code other than 2xx or 503 will trigger the task to retry
-async function _taskCallbackHandler(req, sendToUpstreamFn) {
+async function _taskCallbackHandler(req, { sendToUpstreamFn }) {
   // FIXME need a shared secret for auth here
-  const startMs = Date.now()
   const {uuid, seq} = req.params // FIXME validate?
   log.info(`Processing task callback for ${uuid}, seq=${seq}`)
   const uploadDirPath = makeUploadDirPath(uuid, seq)
@@ -194,7 +236,6 @@ async function _taskCallbackHandler(req, sendToUpstreamFn) {
       return {body: {
         isSuccess: true,
         wasProcessed: false, // it's already been processed previously
-        elapsedMs: Date.now() - startMs,
       }}
     }
     throw err
@@ -205,31 +246,48 @@ async function _taskCallbackHandler(req, sendToUpstreamFn) {
   try {
     log.debug(`Uploading ${uuid} to iNat`)
     const upstreamRespBody = await sendToUpstreamFn(fields, files, authHeader)
-    const upstreamRespBodyPath = path.join(uploadDirPath, 'new-obs.json')
+    const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
     log.debug(`Writing upstream resp body to file: ${upstreamRespBodyPath}`)
     await fsP.writeFile(upstreamRespBodyPath, JSON.stringify(upstreamRespBody))
     log.debug(`Upstream resp body written, removing semaphore for ${uuid}`)
     await fsP.rm(semaphorePath)
     log.debug(`Semaphore for ${uuid} removed`)
-    const elapsedMs = Date.now() - startMs
-    log.info(`Successfully processed ${uuid}; ID=${upstreamRespBody.id}; took ${elapsedMs}ms`)
+    log.info(`Successfully processed ${uuid}; ID=${upstreamRespBody.id}`)
     return {body: {
       isSuccess: true,
       wasProcessed: true,
-      elapsedMs,
     }}
   } catch (err) {
+    // FIXME write error "error.log" file in obs dir
     log.error('Failed to upload to iNat', err)
     // FIXME might need to branch on resp code. 4xx is not worth retrying
-    // FIXME how do we tell GCP Tasks to *not* retry? Explicitly remove the
-    // task from the queue or just return success and raise the alarm
-    // elsewhere?
-    const canRetry = true // FIXME compute this
-    const status = 500 // FIXME
-    const body = {isSuccess: false, canRetry, elapsedMs: Date.now() - startMs}
+    // FIXME how do we know when retries have been exhausted?
+    const isTerminalFailure = false // FIXME compute this
+    if (isTerminalFailure) {
+      // FIXME clean up the semaphore file
+      // FIXME how do we tell GCP Tasks to *not* retry? Explicitly remove the
+      //   task from the queue or just return success and raise the alarm
+      //   elsewhere?
+      const status = 200 // FIXME
+      // FIXME write error to "terminal-error.log" file
+      return {status, body: {isSuccess: false, canRetry: false}}
+    }
+    const status = 500 // will cause GCP Tasks to retry
     // GCP probably doesn't care about the body, but as a dev calling the
     // endpoint, it's useful to know what happened
-    return {status, body}
+    return {status, body: {isSuccess: false, canRetry: true}}
+  }
+}
+
+async function isPathExists(thePath) {
+  try {
+    await fsP.access(thePath)
+    return true
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      throw err
+    }
+    return false
   }
 }
 
@@ -259,8 +317,7 @@ async function _validate(fields, files, uuid) {
   if (files.observation.mimetype !== 'application/json') {
     return '`observation` file must be `application/json`'
   }
-  const obsRawBytes = await fsP.readFile(files.observation.filepath)
-  const observation = JSON.parse(obsRawBytes)
+  const observation  = await readJsonFile(files.observation.filepath)
   const obsUuid = observation.uuid
   if (obsUuid !== uuid) {
     return `UUID mismatch! "${uuid}" in URL path and "${obsUuid}" in body`
@@ -302,10 +359,12 @@ async function createInatObs({projectId}, files, authHeader) {
       }
     )
   }))
+  // FIXME check for, and handle, auth failures from upstream
   // FIXME catch image post error, like an image/* that iNat doesn't like
   const photoIds = photoResps.map(e => e.data.id)
   log.debug(`Photo IDs from responses: ${photoIds}`)
-  const obsJson = JSON.parse(fs.readFileSync(files.observation.filepath))
+  // FIXME handle ENOENT?
+  const obsJson = await readJsonFile(files.observation.filepath)
   const obsBody = {
     observation: obsJson,
     local_photos: {
@@ -320,12 +379,13 @@ async function createInatObs({projectId}, files, authHeader) {
   const resp = await axios.post(`${wowConfig().apiBaseUrl}/v1/observations`, obsBody, {
     headers: { Authorization: authHeader }
   })
+  // FIXME check for, and handle, auth failures from upstream
   log.debug(`iNat response status for ${obsJson.uuid}: ${resp.status}`)
   return resp.data
 }
 
 async function updateInatObs(fields, files, authHeader) {
-  const obsJson = JSON.parse(fs.readFileSync(files.observation.filepath))
+  const obsJson = await readJsonFile(files.observation.filepath)
   const inatRecordId = obsJson.id
   if (!inatRecordId) {
     log.error('Dumping observation JSON for error', obsJson)
@@ -342,6 +402,7 @@ async function updateInatObs(fields, files, authHeader) {
       contentType: p.mimetype,
       knownLength: p.size,
     })
+    // FIXME check for, and handle, auth failures from upstream
     return axios.post(
       `${wowConfig().apiBaseUrl}/v1/observation_photos`,
       form,
@@ -356,6 +417,7 @@ async function updateInatObs(fields, files, authHeader) {
   const photoIdsToDelete = JSON.parse(fields['photos-delete'])
   await Promise.all(photoIdsToDelete.map(id => {
     log.debug(`Deleting photo ${id}`)
+    // FIXME check for, and handle, auth failures from upstream
     return axios.delete(
       `${wowConfig().apiBaseUrl}/v1/observation_photos/${id}`,
       { headers: { Authorization: authHeader } }
@@ -364,6 +426,7 @@ async function updateInatObs(fields, files, authHeader) {
   const obsFieldIdsToDelete = JSON.parse(fields['obsFields-delete'])
   await Promise.all(obsFieldIdsToDelete.map(id => {
     log.debug(`Deleting obs field ${id}`)
+    // FIXME check for, and handle, auth failures from upstream
     return axios.delete(
       `${wowConfig().apiBaseUrl}/v1/observation_field_values/${id}`,
       { headers: { Authorization: authHeader } }
@@ -379,6 +442,7 @@ async function updateInatObs(fields, files, authHeader) {
     },
     { headers: { Authorization: authHeader } }
   )
+  // FIXME check for, and handle, auth failures from upstream
   log.debug(`iNat response status for ${inatRecordId}: ${resp.status}`)
   return resp.data
 }
@@ -387,13 +451,21 @@ function makeManifestPath(basePath) {
   return path.join(basePath, 'manifest.json')
 }
 
-async function readManifest(basePath) {
-  const manifestRaw = await fsP.readFile(makeManifestPath(basePath))
-  return JSON.parse(manifestRaw)
+function readManifest(basePath) {
+  return readJsonFile(makeManifestPath(basePath))
 }
 
 function makeSemaphorePath(basePath) {
   return path.join(basePath, 'semaphore.txt')
+}
+
+function makeUpstreamBodyPath(basePath) {
+  return path.join(basePath, 'new-obs.json')
+}
+
+async function readJsonFile(thePath) {
+  const raw = await fsP.readFile(thePath)
+  return JSON.parse(raw)
 }
 
 function makeUploadDirPath(uuid, seq) {
@@ -425,9 +497,58 @@ async function scheduleGcpTask(httpMethod, url) {
   log.debug('Task scheduled')
 }
 
+async function authMiddleware(req, res, next) {
+  const authHeader = req.headers['authorization']
+  // FIXME could check it looks like a JWT
+  // FIXME check JWTs have "enough" time left before expiry to reduce chance of
+  //   upstream failures
+  if (!authHeader) {
+    return res
+      .status(401)
+      .send({error: `Authorization header must be provided`})
+  }
+  try {
+    log.debug(`Checking if supplied auth is valid: ${authHeader.substr(0,20)}...`)
+    const resp = await axios.get(`${apiBaseUrl}/v1/users/me`, {
+      headers: { Authorization: authHeader }
+    })
+    log.info('Auth from observations bundle is valid', resp.status)
+    req.userDetail = resp.data?.results[0]
+    return next()
+  } catch (err) {
+    log.info('Verifying auth passed in observations bundle has failed!', err.response.status)
+    return res
+      .status(401)
+      .send({
+        error: 'Authorization was rejected by upstream iNat server',
+        upstreamError: err.response.data,
+      })
+  }
+}
+
+function isUuid(uuid) {
+  // thanks https://ihateregex.io/expr/uuid/
+  const uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/
+  return uuid.match(uuidRegex)
+}
+
 module.exports = {
-  obsPostHandler: asyncHandler(_obsHandler, validatePost),
-  obsPutHandler: asyncHandler(_obsHandler, validatePut),
-  taskCallbackPostHandler: asyncHandler(_taskCallbackHandler, createInatObs),
-  taskCallbackPutHandler: asyncHandler(_taskCallbackHandler, updateInatObs),
+  obsPostHandler: asyncHandler(_obsHandler, {
+    validateFn: validatePost,
+  }),
+  obsPutHandler: asyncHandler(_obsHandler, {
+    validateFn: validatePut,
+  }),
+  obsTaskStatusHandler: asyncHandler(_obsTaskStatusHandler),
+  obsDeleteStatusHandler: asyncHandler(_obsDeleteStatusHandler),
+  taskCallbackPostHandler: asyncHandler(_taskCallbackHandler, {
+    sendToUpstreamFn: createInatObs,
+  }),
+  taskCallbackPutHandler: asyncHandler(_taskCallbackHandler, {
+    sendToUpstreamFn: updateInatObs,
+  }),
+  authMiddleware,
+  _testonly: {
+    _obsDeleteStatusHandler,
+  },
 }

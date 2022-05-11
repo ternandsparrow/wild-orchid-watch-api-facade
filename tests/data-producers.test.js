@@ -1,3 +1,4 @@
+const {fail} = require('jest')
 const objectUnderTest = require('../src/data-producers.js')._testonly
 
 describe('_obsDeleteStatusHandler', () => {
@@ -22,7 +23,7 @@ describe('_obsDeleteStatusHandler', () => {
       await objectUnderTest._obsDeleteStatusHandler(req, {axios, apiBaseUrl: 'z'})
       fail()
     } catch (err) {
-      expect(err.message).toBe('processing')
+      expect(err.message).toBe('bang')
     }
   })
 })

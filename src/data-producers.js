@@ -68,7 +68,7 @@ async function _obsDeleteStatusHandler(req, {axios, apiBaseUrl}) {
   }}
 }
 
-async function _obsHandler(req, { axios, apiBaseUrl, isLocalDev, validateFn }) {
+async function _obsHandler(req, { isLocalDev, validateFn }) {
   const httpMethod = req.method
   const {uuid} = req.params
   if (!isUuid(uuid)) {
@@ -201,6 +201,13 @@ function asyncHandler(workerFn, ...extraParams) {
       axios: realAxios,
       ...wowConfig(),
     }
+    wowContext.dispatch = (fnName, ...args) => {
+      const dispatchables = {
+        createInatObs,
+        updateInatObs,
+      }
+      return dispatchables[fnName](wowContext, ...args)
+    }
     workerFn(req, wowContext)
       .then(({status, body}) => {
         const elapsedMs = Date.now() - startMs
@@ -221,7 +228,7 @@ function asyncHandler(workerFn, ...extraParams) {
 
 // according to https://cloud.google.com/tasks/docs/tutorial-gcf
 // > Any status code other than 2xx or 503 will trigger the task to retry
-async function _taskCallbackHandler(req, { sendToUpstreamFn }) {
+async function _taskCallbackHandler(req, { dispatch, sendToUpstreamFnName }) {
   // FIXME need a shared secret for auth here
   const {uuid, seq} = req.params // FIXME validate?
   log.info(`Processing task callback for ${uuid}, seq=${seq}`)
@@ -245,7 +252,7 @@ async function _taskCallbackHandler(req, { sendToUpstreamFn }) {
   // FIXME validate authHeader
   try {
     log.debug(`Uploading ${uuid} to iNat`)
-    const upstreamRespBody = await sendToUpstreamFn(fields, files, authHeader)
+    const upstreamRespBody = await dispatch(sendToUpstreamFnName, fields, files, authHeader)
     const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
     log.debug(`Writing upstream resp body to file: ${upstreamRespBodyPath}`)
     await fsP.writeFile(upstreamRespBodyPath, JSON.stringify(upstreamRespBody))
@@ -337,7 +344,7 @@ function getPhotosFromFiles(files) {
   return photos.constructor === Array ? files.photos : [files.photos]
 }
 
-async function createInatObs({projectId}, files, authHeader) {
+async function createInatObs({axios, apiBaseUrl}, {projectId}, files, authHeader) {
   const photos = getPhotosFromFiles(files)
   log.debug(`Uploading ${photos.length} photos`)
   const photoResps = await Promise.all(photos.map(p => {
@@ -349,7 +356,7 @@ async function createInatObs({projectId}, files, authHeader) {
       knownLength: p.size,
     })
     return axios.post(
-      `${wowConfig().apiBaseUrl}/v1/photos`,
+      `${apiBaseUrl}/v1/photos`,
       form,
       {
         headers: {
@@ -376,7 +383,7 @@ async function createInatObs({projectId}, files, authHeader) {
       projectId,
     ]
   }
-  const resp = await axios.post(`${wowConfig().apiBaseUrl}/v1/observations`, obsBody, {
+  const resp = await axios.post(`${apiBaseUrl}/v1/observations`, obsBody, {
     headers: { Authorization: authHeader }
   })
   // FIXME check for, and handle, auth failures from upstream
@@ -384,7 +391,7 @@ async function createInatObs({projectId}, files, authHeader) {
   return resp.data
 }
 
-async function updateInatObs(fields, files, authHeader) {
+async function updateInatObs({axios, apiBaseUrl}, fields, files, authHeader) {
   const obsJson = await readJsonFile(files.observation.filepath)
   const inatRecordId = obsJson.id
   if (!inatRecordId) {
@@ -404,7 +411,7 @@ async function updateInatObs(fields, files, authHeader) {
     })
     // FIXME check for, and handle, auth failures from upstream
     return axios.post(
-      `${wowConfig().apiBaseUrl}/v1/observation_photos`,
+      `${apiBaseUrl}/v1/observation_photos`,
       form,
       {
         headers: {
@@ -419,7 +426,7 @@ async function updateInatObs(fields, files, authHeader) {
     log.debug(`Deleting photo ${id}`)
     // FIXME check for, and handle, auth failures from upstream
     return axios.delete(
-      `${wowConfig().apiBaseUrl}/v1/observation_photos/${id}`,
+      `${apiBaseUrl}/v1/observation_photos/${id}`,
       { headers: { Authorization: authHeader } }
     )
   }))
@@ -428,13 +435,13 @@ async function updateInatObs(fields, files, authHeader) {
     log.debug(`Deleting obs field ${id}`)
     // FIXME check for, and handle, auth failures from upstream
     return axios.delete(
-      `${wowConfig().apiBaseUrl}/v1/observation_field_values/${id}`,
+      `${apiBaseUrl}/v1/observation_field_values/${id}`,
       { headers: { Authorization: authHeader } }
     )
   }))
   log.debug(`Updating observation with ID=${inatRecordId}`)
   const resp = await axios.put(
-    `${wowConfig().apiBaseUrl}/v1/observations/${inatRecordId}`,
+    `${apiBaseUrl}/v1/observations/${inatRecordId}`,
     {
       // note: obs fields *not* included here are *not* implicitly deleted.
       observation: obsJson,
@@ -509,7 +516,7 @@ async function authMiddleware(req, res, next) {
   }
   try {
     log.debug(`Checking if supplied auth is valid: ${authHeader.substr(0,20)}...`)
-    const resp = await axios.get(`${apiBaseUrl}/v1/users/me`, {
+    const resp = await realAxios.get(`${wowConfig().apiBaseUrl}/v1/users/me`, {
       headers: { Authorization: authHeader }
     })
     log.info('Auth from observations bundle is valid', resp.status)
@@ -542,10 +549,10 @@ module.exports = {
   obsTaskStatusHandler: asyncHandler(_obsTaskStatusHandler),
   obsDeleteStatusHandler: asyncHandler(_obsDeleteStatusHandler),
   taskCallbackPostHandler: asyncHandler(_taskCallbackHandler, {
-    sendToUpstreamFn: createInatObs,
+    sendToUpstreamFnName: createInatObs.name,
   }),
   taskCallbackPutHandler: asyncHandler(_taskCallbackHandler, {
-    sendToUpstreamFn: updateInatObs,
+    sendToUpstreamFnName: updateInatObs.name,
   }),
   authMiddleware,
   _testonly: {

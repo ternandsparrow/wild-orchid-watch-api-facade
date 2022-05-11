@@ -1,22 +1,28 @@
 const cors = require('cors')
 const express = require('express')
-const {json, log, taskCallbackUrlPrefix, wowConfig} = require('./src/lib.js')
+const {
+  json,
+  log,
+  taskCallbackUrlPrefix,
+  taskStatusUrlPrefix,
+  wowConfig,
+} = require('./src/lib.js')
 const {dataConsumerObservationsHandler} = require('./src/data-consumers.js')
 const {
+  authMiddleware: userAuthMiddleware,
   obsDeleteStatusHandler,
   obsPostHandler,
   obsPutHandler,
   obsTaskStatusHandler,
   taskCallbackPostHandler,
   taskCallbackPutHandler,
-  authMiddleware: userAuthMiddleware,
 } = require('./src/data-producers.js')
 
 const uuidPathMatcher = ':uuid([0-9a-fA-F-]+)'
 const seqPathMatcher = ':seq([0-9]+)'
 const obsUploadUrl = `/observations/${uuidPathMatcher}`
 const deleteStatusUrl = `/task-status/:inatId([0-9]+)/delete`
-const otherStatusUrl = `/task-status/${uuidPathMatcher}/${seqPathMatcher}`
+const otherStatusUrl = `${taskStatusUrlPrefix}/${uuidPathMatcher}/${seqPathMatcher}`
 const app = express()
 const port = process.env.PORT || 3000
 

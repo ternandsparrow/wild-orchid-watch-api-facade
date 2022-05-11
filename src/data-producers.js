@@ -8,7 +8,12 @@ const realAxios = require('axios')
 const FormData = require('form-data')
 const formidable = require('formidable')
 const {CloudTasksClient} = require('@google-cloud/tasks')
-const {log, taskCallbackUrlPrefix, wowConfig} = require('./lib.js')
+const {
+  log,
+  taskCallbackUrlPrefix,
+  taskStatusUrlPrefix,
+  wowConfig,
+} = require('./lib.js')
 
 async function _obsTaskStatusHandler(req) {
   // FIXME need auth here because we return sensitive data
@@ -115,8 +120,8 @@ async function _obsHandler(req, { isLocalDev, validateFn }) {
     })()
     const callbackUrl = `${serverUrlPrefix}${taskCallbackUrlPrefix}/${commonUrlSuffix}`
     log.debug(`Callback URL will be: ${httpMethod} ${callbackUrl}`)
-    const statusUrl = `${serverUrlPrefix}${taskCallbackUrlPrefix}/${commonUrlSuffix}`
-    log.debug(`Status URL will be: GET ${callbackUrl}`)
+    const statusUrl = `${serverUrlPrefix}${taskStatusUrlPrefix}/${commonUrlSuffix}`
+    log.debug(`Status URL will be: GET ${statusUrl}`)
     await scheduleGcpTask(httpMethod, callbackUrl)
     const extra = isLocalDev ? {fields, files} : {}
     return {body: {
@@ -192,14 +197,14 @@ async function setupUploadDirForThisUuid(uuid) {
   return {uploadDirPath, uploadSeq: seq}
 }
 
-function asyncHandler(workerFn, ...extraParams) {
+function asyncHandler(workerFn, extraParams) {
   return function(req, res) {
     const startMs = Date.now()
     res.set('Content-type', 'application/json')
     const wowContext = {
-      ...extraParams,
       axios: realAxios,
       ...wowConfig(),
+      ...extraParams,
     }
     wowContext.dispatch = (fnName, ...args) => {
       const dispatchables = {

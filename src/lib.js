@@ -155,5 +155,6 @@ module.exports = {
   log,
   stripTrailingSlashes,
   taskCallbackUrlPrefix: '/task-callback',
+  taskStatusUrlPrefix: '/task-status',
   wowConfig,
 }

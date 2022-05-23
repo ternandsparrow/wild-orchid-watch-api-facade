@@ -57,6 +57,7 @@ app.options(otherStatusUrl, corsMiddleware)
 app.post(obsUploadUrl, corsMiddleware, userAuthMiddleware, obsPostHandler)
 // update an observation
 app.put(obsUploadUrl, corsMiddleware, userAuthMiddleware, obsPutHandler)
+// FIXME add a PATCH handler that just updated the apiToken and enqueues the task again?
 
 // poll upstream to see if delete has happened
 app.get(deleteStatusUrl, corsMiddleware, obsDeleteStatusHandler)

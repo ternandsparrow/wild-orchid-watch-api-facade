@@ -34,12 +34,16 @@ async function _obsTaskStatusHandler(req) {
   }
   const [taskStatus, upstreamBody] = await (async () => {
     const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
+    const semaphorePath = makeSemaphorePath(uploadDirPath)
     try {
       const upstreamBody = await readJsonFile(upstreamRespBodyPath)
       return ['success', upstreamBody]
     } catch (err) {
       if (err.code === 'ENOENT') {
-        // FIXME how do we indicate failure? Write a "terminal-error.log" file?
+        const isSemaphoreExists = await isPathExists(semaphorePath)
+        if (!isSemaphoreExists) {
+          return ['failure', null]
+        }
         return ['processing', null]
       }
       throw new err
@@ -262,32 +266,45 @@ async function _taskCallbackHandler(req, { dispatch, sendToUpstreamFnName }) {
     log.debug(`Writing upstream resp body to file: ${upstreamRespBodyPath}`)
     await fsP.writeFile(upstreamRespBodyPath, JSON.stringify(upstreamRespBody))
     log.debug(`Upstream resp body written, removing semaphore for ${uuid}`)
-    await fsP.rm(semaphorePath)
-    log.debug(`Semaphore for ${uuid} removed`)
     log.info(`Successfully processed ${uuid}; ID=${upstreamRespBody.id}`)
     return {body: {
       isSuccess: true,
       wasProcessed: true,
     }}
   } catch (err) {
-    // FIXME write error "error.log" file in obs dir
-    log.error('Failed to upload to iNat', err)
-    // FIXME might need to branch on resp code. 4xx is not worth retrying
+    const upstreamStatus = (err.response || {}).status
+    const errorLogPath = makeErrorLogPath(uploadDirPath)
+    const errDump = err.stack || err.msg
+    await fsP.appendFile(
+      errorLogPath,
+      `[${new Date().toISOString()}] Status=${upstreamStatus}; err=${errDump}\n`,
+    )
+    if (upstreamStatus) {
+      log.error(
+        `Failed to upload to iNat with status=${upstreamStatus}.`,
+        err.response.data,
+      )
+    } else {
+      log.error('Failed to upload to iNat', err)
+    }
     // FIXME how do we know when retries have been exhausted?
-    const isTerminalFailure = false // FIXME compute this
+    const isTerminalFailure = upstreamStatus === 401
     if (isTerminalFailure) {
-      // FIXME clean up the semaphore file
-      // FIXME how do we tell GCP Tasks to *not* retry? Explicitly remove the
-      //   task from the queue or just return success and raise the alarm
-      //   elsewhere?
-      const status = 200 // FIXME
-      // FIXME write error to "terminal-error.log" file
+      await rmSemaphore()
+      const status = 200 // not success as such, but the task cannot be retried
+      const noRetryMsg = 'Above error was terminal, task will not be retried\n'
+      await fsP.appendFile(errorLogPath, noRetryMsg)
+      console.warn(noRetryMsg)
       return {status, body: {isSuccess: false, canRetry: false}}
     }
     const status = 500 // will cause GCP Tasks to retry
     // GCP probably doesn't care about the body, but as a dev calling the
     // endpoint, it's useful to know what happened
     return {status, body: {isSuccess: false, canRetry: true}}
+  }
+  async function rmSemaphore() {
+    await fsP.rm(semaphorePath)
+    log.debug(`Semaphore for ${uuid} removed`)
   }
 }
 
@@ -469,6 +486,10 @@ function readManifest(basePath) {
 
 function makeSemaphorePath(basePath) {
   return path.join(basePath, 'semaphore.txt')
+}
+
+function makeErrorLogPath(basePath) {
+  return path.join(basePath, 'error.log')
 }
 
 function makeUpstreamBodyPath(basePath) {

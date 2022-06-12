@@ -224,7 +224,7 @@ function asyncHandler(workerFn, extraParams) {
           ...body,
           elapsedMs,
         }
-        log.debug(`Elapsed ${elapsedMs}ms`)
+        log.debug(`${workerFn.name} elapsed ${elapsedMs}ms`)
         return res.status(status || 200).send(respBody)
       })
       .catch(err => {

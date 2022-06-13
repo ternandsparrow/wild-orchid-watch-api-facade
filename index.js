@@ -10,19 +10,18 @@ const {
 const {dataConsumerObservationsHandler} = require('./src/data-consumers.js')
 const {
   authMiddleware: userAuthMiddleware,
+  getUuidsWithPendingStatus,
+  initDb,
   obsDeleteStatusHandler,
-  obsPostHandler,
-  obsPutHandler,
+  obsHandler,
   obsTaskStatusHandler,
   taskCallbackPostHandler,
-  taskCallbackPutHandler,
 } = require('./src/data-producers.js')
 
 const uuidPathMatcher = ':uuid([0-9a-fA-F-]+)'
-const seqPathMatcher = ':seq([0-9]+)'
 const obsUploadUrl = `/observations/${uuidPathMatcher}`
 const deleteStatusUrl = `/task-status/:inatId([0-9]+)/delete`
-const otherStatusUrl = `${taskStatusUrlPrefix}/${uuidPathMatcher}/${seqPathMatcher}`
+const otherStatusUrl = `${taskStatusUrlPrefix}/${uuidPathMatcher}`
 const app = express()
 const port = process.env.PORT || 3000
 
@@ -48,26 +47,28 @@ log.info(`Started; running version ${wowConfig().gitSha}`)
 
 app.get('/wow-observations', dataConsumerObservationsHandler)
 
-const corsMiddleware = cors({methods: ['POST', 'PUT']})
+const corsMiddleware = cors({methods: ['POST']})
 app.options(obsUploadUrl, corsMiddleware)
 app.options(deleteStatusUrl, corsMiddleware)
 app.options(otherStatusUrl, corsMiddleware)
 
-// create an observation
-app.post(obsUploadUrl, corsMiddleware, userAuthMiddleware, obsPostHandler)
-// update an observation
-app.put(obsUploadUrl, corsMiddleware, userAuthMiddleware, obsPutHandler)
-// FIXME add a PATCH handler that just updated the apiToken and enqueues the task again?
+app.post(obsUploadUrl, corsMiddleware, userAuthMiddleware, obsHandler)
 
+// FIXME future enhancement idea: add a PATCH handler that just updates the
+//   apiToken and enqueues the task again
+
+// FIXME add delete endpoint
+
+// FIXME unify to one endpoint
 // poll upstream to see if delete has happened
 app.get(deleteStatusUrl, corsMiddleware, obsDeleteStatusHandler)
 // poll progress of create or update task
 app.get(otherStatusUrl, corsMiddleware, userAuthMiddleware, obsTaskStatusHandler)
 
-// endpoint for task queue to call, for "create obs" tasks
-app.post(`${taskCallbackUrlPrefix}/${uuidPathMatcher}/${seqPathMatcher}`, taskCallbackPostHandler)
-// endpoint for task queue to call, for "update obs" tasks
-app.put(`${taskCallbackUrlPrefix}/${uuidPathMatcher}/${seqPathMatcher}`, taskCallbackPutHandler)
+// endpoint for task queue to call
+app.post(`${taskCallbackUrlPrefix}/${uuidPathMatcher}`, taskCallbackPostHandler)
+
+app.get('/ops/task-statuses', getUuidsWithPendingStatus)
 
 app.get('/version', (req, res) => {
   log.info('Handling version endpoint')
@@ -83,6 +84,7 @@ app.get('/version', (req, res) => {
   return json(res, result, 200)
 })
 
+initDb()
 app.listen(port, () => {
   log.info(`WOW API Facade listening on port ${port}`)
 })

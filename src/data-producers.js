@@ -7,6 +7,8 @@ const path = require('path')
 const realAxios = require('axios')
 const FormData = require('form-data')
 const formidable = require('formidable')
+const betterSqlite3 = require('better-sqlite3')
+
 const {CloudTasksClient} = require('@google-cloud/tasks')
 const {
   log,
@@ -15,46 +17,52 @@ const {
   wowConfig,
 } = require('./lib.js')
 
+const dbPath = process.env.DB_PATH || path.join(wowConfig().rootUploadDirPath, 'data.db')
+
+const getDb = (() => {
+  let instance = null
+  return function() {
+    if (!instance) {
+      log.debug('Creating new sqlite client')
+      instance = betterSqlite3(dbPath)
+      process.on('exit', () => {
+        console.debug('Closing sqlite connection')
+        instance.close()
+      })
+    }
+    return instance
+  }
+})()
+
 async function _obsTaskStatusHandler(req) {
   // FIXME need auth here because we return sensitive data
-  const {uuid, seq} = req.params
+  const {uuid} = req.params
   if (!isUuid(uuid)) {
     return {
       status: 400,
       body: {error: `uuid path param is NOT valid`},
     }
   }
-  // FIXME validate seq
+  const {seq, status} = getLatestUploadRecord(uuid)
   const uploadDirPath = makeUploadDirPath(uuid, seq)
   if (!(await isPathExists(uploadDirPath))) {
     return {
       status: 404,
-      body: {error: `uuid and seq combination does not exist`},
+      body: {error: `uuid has no tasks`},
     }
   }
-  const [taskStatus, upstreamBody] = await (async () => {
-    const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
-    const semaphorePath = makeSemaphorePath(uploadDirPath)
-    try {
-      const upstreamBody = await readJsonFile(upstreamRespBodyPath)
-      return ['success', upstreamBody]
-    } catch (err) {
-      if (err.code === 'ENOENT') {
-        const isSemaphoreExists = await isPathExists(semaphorePath)
-        if (!isSemaphoreExists) {
-          return ['failure', null]
-        }
-        return ['processing', null]
-      }
-      throw new err
+  const upstreamBody = await (() => {
+    if (status !== 'success') {
+      return
     }
+    const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
+    return readJsonFile(upstreamRespBodyPath)
   })()
   return {body: {
-    taskStatus,
+    taskStatus: status,
     upstreamBody,
     req: {
       uuid,
-      seq,
     },
   }}
 }
@@ -77,8 +85,7 @@ async function _obsDeleteStatusHandler(req, {axios, apiBaseUrl}) {
   }}
 }
 
-async function _obsHandler(req, { isLocalDev, validateFn }) {
-  const httpMethod = req.method
+async function obsHandler(req, { isLocalDev }) {
   const {uuid} = req.params
   if (!isUuid(uuid)) {
     return {
@@ -86,7 +93,7 @@ async function _obsHandler(req, { isLocalDev, validateFn }) {
       body: {error: `uuid path param is NOT valid`},
     }
   }
-  log.info(`Handling obs ${httpMethod} for ${uuid}`)
+  log.info(`Handling obs ${uuid}`)
   // FIXME should we support ETag or similar to detect duplicate uploads?
   // FIXME should we roll our own resumable upload logic where the client can
   //   query how much data the server has? probably requires an endpoint to
@@ -95,8 +102,8 @@ async function _obsHandler(req, { isLocalDev, validateFn }) {
   //   if service workers are aware of websockets or if they're treated the
   //   same way.
   const expectedContentType = 'multipart/form-data'
-  const isNotMultipart = !~(req.headers['content-type'] || '')
-    .indexOf(expectedContentType)
+  const isNotMultipart = (req.headers['content-type'] || '')
+    .indexOf(expectedContentType) < 0
   if (isNotMultipart) {
     return {
       status: 415,
@@ -104,82 +111,86 @@ async function _obsHandler(req, { isLocalDev, validateFn }) {
     }
   }
   let { userDetail } = req
-  const {uploadDirPath, uploadSeq} = await setupUploadDirForThisUuid(uuid)
-  await formidableParse(uploadDirPath, req, userDetail)
-  try {
-    const {files, fields} = await readManifest(uploadDirPath)
-    const validationError = await validateFn(fields, files, uuid)
-    if (validationError) {
-      return {
-        status: 400,
-        body: {message: validationError}
-      }
-    }
-    log.info(`Parsed and validated request with ${
-      Object.keys(fields).length} fields and ${Object.keys(files).length} files`)
-    const commonUrlSuffix = `${uuid}/${uploadSeq}`
-    const serverUrlPrefix = (()=> {
-      const protocol = isLocalDev ? req.protocol : 'https'
-      return `${protocol}://${req.headers.host}`
-    })()
-    const callbackUrl = `${serverUrlPrefix}${taskCallbackUrlPrefix}/${commonUrlSuffix}`
-    log.debug(`Callback URL will be: ${httpMethod} ${callbackUrl}`)
-    const statusUrl = `${serverUrlPrefix}${taskStatusUrlPrefix}/${commonUrlSuffix}`
-    log.debug(`Status URL will be: GET ${statusUrl}`)
-    await scheduleGcpTask(httpMethod, callbackUrl)
-    const extra = isLocalDev ? {fields, files} : {}
-    return {body: {
-      ...extra,
-      uuid,
-      statusUrl,
-      queuedTaskDetails: {
-        callbackMethod: httpMethod,
-        callbackUrl,
-      },
-    }}
-  } catch (err) {
-    if (err.response) {
-      const {status, data} = err.response
-      if (status) {
-        const body = typeof data === 'string' ? data : JSON.stringify(data)
-        throw new Error(`Upstream failed with status ${status} and body: ${body}`)
-      }
-    }
-    throw err
-  }
-}
-
-async function formidableParse(uploadDirPath, req, userDetail) {
+  const { uploadDirPath, seq } = await setupUploadDirForThisUuid(uuid)
   const form = formidable({
     multiples: true,
     uploadDir: uploadDirPath,
   })
   const {fields, files} = await new Promise((resolve, reject) => {
     form.parse(req, (err, fields, files) => {
-      // FIXME does the memory usage go down after we've read the req body stream
       if (err) {
         return reject(err)
       }
       return resolve({fields, files})
     })
   })
-  await fsP.writeFile(
-    makeSemaphorePath(uploadDirPath),
-    req.headers['authorization']
-  )
-  const manifest = {
-    fields,
-    files,
-    method: req.method,
-    user: {
-      login: userDetail.login,
-      email: userDetail.email,
-    },
+  const validationResp = await validate(fields, files, uuid)
+  if (!validationResp.isSuccess) {
+    return {
+      status: 400,
+      body: {message: validationResp}
+    }
   }
-  await fsP.writeFile(
-    makeManifestPath(uploadDirPath),
-    JSON.stringify(manifest)
-  )
+  log.info(`Parsed and validated request with ${
+    Object.keys(fields).length} fields and ${Object.keys(files).length} files`)
+  const db = getDb()
+  const t = db.transaction(() => {
+    const {changes} = db.prepare(`
+      UPDATE uploads
+      SET status = 'superseded'
+      WHERE uuid = ?
+      AND status = 'pending'
+    `).run(uuid)
+    log.debug(`Marked ${changes} old ${uuid} records as superseded`)
+    log.debug(`Creating upload record for ${uuid}`)
+    const {lastInsertRowid} = db.prepare(`
+      INSERT INTO uploads (
+        uuid, inatId, projectId, user, obsJsonPath, apiToken, status, seq, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, datetime())
+    `)
+    .run(
+      uuid,
+      validationResp.inatId,
+      fields.projectId,
+      userDetail.login,
+      files.observation.filepath,
+      req.headers['authorization'],
+      seq,
+    )
+    const {uploadId} = db
+      .prepare('SELECT uploadId FROM uploads WHERE rowid = ?')
+      .get(lastInsertRowid)
+    log.debug(`upload for ${uuid} has id=${uploadId}`)
+    const stmt = db.prepare(
+      'INSERT INTO photos (size, filepath, mimetype, uploadId) ' +
+      'VALUES (?, ?, ?, ?)'
+    )
+    files.photos.forEach(p => {
+      log.debug(`Creating photo record for ${p.filepath}`)
+      stmt.run(p.size, p.filepath, p.mimetype, uploadId)
+    })
+  })
+  t()
+  const serverUrlPrefix = (()=> {
+    const protocol = isLocalDev ? req.protocol : 'https'
+    return `${protocol}://${req.headers.host}`
+  })()
+  const callbackMethod = 'POST'
+  const callbackUrl = `${serverUrlPrefix}${taskCallbackUrlPrefix}/${uuid}`
+  log.debug(`Callback URL will be: ${callbackMethod} ${callbackUrl}`)
+  const statusUrl = `${serverUrlPrefix}${taskStatusUrlPrefix}/${uuid}`
+  log.debug(`Status URL will be: GET ${statusUrl}`)
+  await scheduleGcpTask(callbackUrl)
+  const extra = isLocalDev ? {fields, files} : {}
+  return {body: {
+    ...extra,
+    uuid,
+    statusUrl,
+    queuedTaskDetails: {
+      callbackMethod,
+      callbackUrl,
+    },
+  }}
 }
 
 async function setupUploadDirForThisUuid(uuid) {
@@ -198,7 +209,7 @@ async function setupUploadDirForThisUuid(uuid) {
   log.debug(`Creating empty upload dir ${uploadDirPath}...`)
   await fsP.mkdir(uploadDirPath)
   log.debug(`Upload dir ${uploadDirPath} successfully created`)
-  return {uploadDirPath, uploadSeq: seq}
+  return {uploadDirPath, seq}
 }
 
 function asyncHandler(workerFn, extraParams) {
@@ -235,37 +246,55 @@ function asyncHandler(workerFn, extraParams) {
   }
 }
 
+function getLatestUploadRecord(uuid) {
+  const result = getDb().prepare(`
+    SELECT uploadId, status, seq, inatId
+    FROM uploads
+    WHERE uuid = @uuid
+    AND updatedAt = (
+      SELECT max(updatedAt)
+      FROM uploads
+      WHERE uuid = @uuid
+    )
+  `).get({uuid})
+  return result || {}
+}
+
 // according to https://cloud.google.com/tasks/docs/tutorial-gcf
 // > Any status code other than 2xx or 503 will trigger the task to retry
-async function _taskCallbackHandler(req, { dispatch, sendToUpstreamFnName }) {
+async function _taskCallbackHandler(req, { dispatch }) {
   // FIXME need a shared secret for auth here
-  const {uuid, seq} = req.params // FIXME validate?
-  log.info(`Processing task callback for ${uuid}, seq=${seq}`)
-  const uploadDirPath = makeUploadDirPath(uuid, seq)
-  let authHeader
-  const semaphorePath = makeSemaphorePath(uploadDirPath)
-  try {
-    log.debug(`Reading auth header for ${uuid}`)
-    authHeader = await fsP.readFile(semaphorePath)
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      return {body: {
-        isSuccess: true,
-        wasProcessed: false, // it's already been processed previously
-      }}
-    }
-    throw err
+  const {uuid} = req.params // FIXME validate?
+  log.info(`Processing task callback for ${uuid}`)
+  const { uploadId, status, seq, inatId } = getLatestUploadRecord(uuid)
+  if (!status) {
+    return {status: 404, body: {msg: `${uuid} not found`}}
   }
-  log.debug(`Reading manifest for ${uuid}`)
-  const {files, fields} = await readManifest(uploadDirPath)
-  // FIXME validate authHeader
+  const isAlreadyProcessed = ['success', 'failure'].includes(status)
+  if (isAlreadyProcessed) {
+    return {body: {
+      isSuccess: true,
+      wasProcessed: false, // it's already been processed previously
+    }}
+  }
+  const uploadDirPath = makeUploadDirPath(uuid, seq)
   try {
     log.debug(`Uploading ${uuid} to iNat`)
-    const upstreamRespBody = await dispatch(sendToUpstreamFnName, fields, files, authHeader)
+    const isUpdate = !!inatId
+    const sendToUpstreamFnName = isUpdate ? updateInatObs.name : createInatObs.name
+    const upstreamRespBody = await dispatch(sendToUpstreamFnName)
     const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
     log.debug(`Writing upstream resp body to file: ${upstreamRespBodyPath}`)
     await fsP.writeFile(upstreamRespBodyPath, JSON.stringify(upstreamRespBody))
-    log.debug(`Upstream resp body written, removing semaphore for ${uuid}`)
+    log.debug(`Upstream resp body written, cleaning up for ${uuid}`)
+    getDb().prepare(`
+      UPDATE uploads
+      SET
+        apiToken = NULL,
+        status = 'success',
+        updatedAt = datetime()
+      WHERE uploadId = ?
+    `).run(uploadId)
     log.info(`Successfully processed ${uuid}; ID=${upstreamRespBody.id}`)
     return {body: {
       isSuccess: true,
@@ -290,7 +319,8 @@ async function _taskCallbackHandler(req, { dispatch, sendToUpstreamFnName }) {
     // FIXME how do we know when retries have been exhausted?
     const isTerminalFailure = upstreamStatus === 401
     if (isTerminalFailure) {
-      await rmSemaphore()
+      // FIXME remove apiToken from record
+      // FIXME update record status
       const status = 200 // not success as such, but the task cannot be retried
       const noRetryMsg = 'Above error was terminal, task will not be retried\n'
       await fsP.appendFile(errorLogPath, noRetryMsg)
@@ -301,10 +331,6 @@ async function _taskCallbackHandler(req, { dispatch, sendToUpstreamFnName }) {
     // GCP probably doesn't care about the body, but as a dev calling the
     // endpoint, it's useful to know what happened
     return {status, body: {isSuccess: false, canRetry: true}}
-  }
-  async function rmSemaphore() {
-    await fsP.rm(semaphorePath)
-    log.debug(`Semaphore for ${uuid} removed`)
   }
 }
 
@@ -320,26 +346,24 @@ async function isPathExists(thePath) {
   }
 }
 
-function validatePost(fields, files, uuid) {
+function _validateCreate(fields, files) {
   if (!fields.projectId) {
-    return 'Must send a `projectId` numeric field'
+    return '"projectId" must be a positive integer'
   }
-  if (isNaN(fields.projectId)) {
-    return '`projectId` must be a numeric field'
+  if (!/^\d+$/.test(fields.projectId)) {
+    return '"projectId" must be a positive integer'
   }
   if (!files.photos) {
     return 'Must send `photos` field'
   }
-  return _validate(fields, files, uuid)
 }
 
-function validatePut(...params) {
+function _validateEdit(...params) {
   // FIXME validate photo IDs to delete
   // FIXME validate obs field IDs to delete
-  return _validate(...params)
 }
 
-async function _validate(fields, files, uuid) {
+async function validate(fields, files, uuid) {
   if (!files.observation) {
     return 'Must send an `observation` file containing JSON'
   }
@@ -355,7 +379,31 @@ async function _validate(fields, files, uuid) {
   if (!photos.every(e => e.mimetype.startsWith('image/'))) {
     return 'All `photos` files must have a `image/*` mime'
   }
-  // FIXME should we validate further, so HEIC, etc are disallowed?
+  // FIXME should we validate further, so HEIC, etc images are disallowed?
+  const validationError = (() => {
+    const isUpdate = !!observation.id
+    if (isUpdate) {
+      return _validateEdit(fields, files)
+    }
+    return _validateCreate(fields, files)
+  })()
+  if (validationError) {
+    return validationError
+  }
+  return {
+    isSuccess: true,
+    inatId: observation.id,
+  }
+}
+
+async function getUuidsWithPendingStatus(req) {
+  // FIXME add auth
+  const pendingUuids = getDb()
+    .prepare("SELECT uuid, status FROM uploads")
+    .all()
+  return {body: {
+    pendingUuids,
+  }}
 }
 
 function getPhotosFromFiles(files) {
@@ -367,6 +415,7 @@ function getPhotosFromFiles(files) {
 }
 
 async function createInatObs({axios, apiBaseUrl}, {projectId}, files, authHeader) {
+  // FIXME read stuff from DB, remove params
   const photos = getPhotosFromFiles(files)
   log.debug(`Uploading ${photos.length} photos`)
   const photoResps = await Promise.all(photos.map(p => {
@@ -414,6 +463,7 @@ async function createInatObs({axios, apiBaseUrl}, {projectId}, files, authHeader
 }
 
 async function updateInatObs({axios, apiBaseUrl}, fields, files, authHeader) {
+  // FIXME read stuff from DB, remove params
   const obsJson = await readJsonFile(files.observation.filepath)
   const inatRecordId = obsJson.id
   if (!inatRecordId) {
@@ -476,14 +526,6 @@ async function updateInatObs({axios, apiBaseUrl}, fields, files, authHeader) {
   return resp.data
 }
 
-function makeManifestPath(basePath) {
-  return path.join(basePath, 'manifest.json')
-}
-
-function readManifest(basePath) {
-  return readJsonFile(makeManifestPath(basePath))
-}
-
 function makeSemaphorePath(basePath) {
   return path.join(basePath, 'semaphore.txt')
 }
@@ -506,6 +548,8 @@ function makeUploadDirPath(uuid, seq) {
 }
 
 async function scheduleGcpTask(httpMethod, url) {
+  // we don't bother killing existing tasks. We've marked the old DB records as
+  // "superseded" so the callback will land and have no effect.
   if (!wowConfig().gcpProject || !wowConfig().gcpQueue) {
     log.debug('GCP queue or project config missing, refusing to schedule ' +
       'task. Call it yourself by hand with curl.')
@@ -525,8 +569,7 @@ async function scheduleGcpTask(httpMethod, url) {
     },
   }
   log.debug(`Scheduling callback task for ${url}`)
-  const request = {parent: parent, task: task}
-  await client.createTask(request)
+  await client.createTask({parent: parent, task: task})
   log.debug('Task scheduled')
 }
 
@@ -565,16 +608,55 @@ function isUuid(uuid) {
   return uuid.match(uuidRegex)
 }
 
+function initDb() {
+  const db = getDb()
+  try {
+    db.prepare('SELECT 1 FROM uploads LIMIT 1').run()
+    log.info(`DB and table exists, init not needed`)
+  } catch (err) {
+    if (!err.message.includes('no such table')) {
+      log.warn('Error from DB check not as expected, dump here for humans to check', err)
+    }
+    log.warn('DB (probably) does not exist, creating it.')
+    const t = db.transaction(() => {
+      db.prepare(`
+        CREATE TABLE uploads (
+          uploadId INTEGER PRIMARY KEY AUTOINCREMENT,
+          uuid TEXT,
+          inatId INT,
+          projectId INT,
+          user TEXT,
+          obsJsonPath TEXT,
+          apiToken TEXT,
+          status TEXT,
+          seq INT,
+          updatedAt INT
+          -- FIXME do we need user email column?
+          -- FIXME do we need method column?
+        )
+      `).run()
+      db.prepare(`
+        CREATE TABLE photos (
+          photoId INTEGER PRIMARY KEY AUTOINCREMENT,
+          size INT,
+          filepath TEXT,
+          mimetype TEXT,
+          uploadId INT,
+          FOREIGN KEY(uploadId) REFERENCES uploads(uploadId)
+        )
+      `).run()
+    })
+    t()
+  }
+}
+
 module.exports = {
-  obsPostHandler: asyncHandler(_obsHandler, {
-    validateFn: validatePost,
-  }),
-  obsPutHandler: asyncHandler(_obsHandler, {
-    validateFn: validatePut,
-  }),
+  initDb,
+  getUuidsWithPendingStatus: asyncHandler(getUuidsWithPendingStatus),
+  obsHandler: asyncHandler(obsHandler),
   obsTaskStatusHandler: asyncHandler(_obsTaskStatusHandler),
   obsDeleteStatusHandler: asyncHandler(_obsDeleteStatusHandler),
-  taskCallbackPostHandler: asyncHandler(_taskCallbackHandler, {
+  taskCallbackPostHandler: asyncHandler(_taskCallbackHandler, { // FIXME
     sendToUpstreamFnName: createInatObs.name,
   }),
   taskCallbackPutHandler: asyncHandler(_taskCallbackHandler, {

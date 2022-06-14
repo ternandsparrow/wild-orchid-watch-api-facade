@@ -35,7 +35,6 @@ const getDb = (() => {
 })()
 
 async function _obsTaskStatusHandler(req) {
-  // FIXME need auth here because we return sensitive data
   const {uuid} = req.params
   if (!isUuid(uuid)) {
     return {
@@ -45,17 +44,11 @@ async function _obsTaskStatusHandler(req) {
   }
   const {seq, status} = getLatestUploadRecord(uuid)
   const uploadDirPath = makeUploadDirPath(uuid, seq)
-  if (!(await isPathExists(uploadDirPath))) {
-    return {
-      status: 404,
-      body: {error: `uuid has no tasks`},
-    }
-  }
-  const upstreamBody = await (() => {
-    if (status !== 'success') {
+  const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
+  const upstreamBody = await (async () => {
+    if (!(await isPathExists(upstreamRespBodyPath))) {
       return
     }
-    const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
     return readJsonFile(upstreamRespBodyPath)
   })()
   return {body: {
@@ -67,25 +60,49 @@ async function _obsTaskStatusHandler(req) {
   }}
 }
 
-async function _obsDeleteStatusHandler(req, {axios, apiBaseUrl}) {
-  // not enforcing auth because we don't provide any sensitive data; anyone can
-  // see if an observation exists
-  const inatId = parseInt(req.params.inatId)
-  // FIXME validate param
-  const resp = await axios.get(`${apiBaseUrl}/v1/observations/${inatId}`)
-  const totalResults = resp.data.total_results
-  const taskStatus = totalResults > 0 ? 'processing' : 'success'
-  // FIXME is there a possible 'failure' status? How would we check? I don't
-  //  think there is because the client sends the delete direct to iNat, so we
-  //  can only have an error here, which does *not* indicate failure, just that
-  //  the client should try later.
+async function obsDeleteHandler(req, { isLocalDev }) {
+  const {uuid, inatId} = req.params
+  const db = getDb()
+  const t = db.transaction(() => {
+    markSuperseded(db, uuid)
+    db.prepare(`
+      INSERT INTO uploads (
+        uuid, inatId, user, apiToken, status, updatedAt
+      ) VALUES (?, ?, ?, ?, 'pending', datetime())
+    `)
+    .run(
+      uuid,
+      inatId,
+      req.userDetail.login,
+      req.headers['authorization'],
+    )
+  })
+  t()
+  const callbackMethod = 'DELETE'
+  const {callbackUrl, statusUrl} = getTheUrls(req, isLocalDev, uuid)
+  log.debug(`Callback URL will be: ${callbackMethod} ${callbackUrl}`)
+  log.debug(`Status URL will be: GET ${statusUrl}`)
+  await scheduleGcpTask(callbackMethod, callbackUrl)
   return {body: {
-    taskStatus,
-    totalResults,
+    uuid,
+    statusUrl,
+    queuedTaskDetails: {
+      callbackMethod,
+      callbackUrl,
+    },
   }}
 }
 
-async function obsHandler(req, { isLocalDev }) {
+function isCallbackAuthValid(req) {
+  const secret = wowConfig().callbackSecret
+  if (!secret) {
+    return true
+  }
+  const authHeader = req.headers['authorization']
+  return authHeader === secret
+}
+
+async function obsUpsertHandler(req, { isLocalDev }) {
   const {uuid} = req.params
   if (!isUuid(uuid)) {
     return {
@@ -135,20 +152,9 @@ async function obsHandler(req, { isLocalDev }) {
     Object.keys(fields).length} fields and ${Object.keys(files).length} files`)
   const db = getDb()
   const t = db.transaction(() => {
-    const {changes} = db.prepare(`
-      UPDATE uploads
-      SET status = 'superseded'
-      WHERE uuid = ?
-      AND status = 'pending'
-    `).run(uuid)
-    log.debug(`Marked ${changes} old ${uuid} records as superseded`)
+    markSuperseded(db, uuid)
     log.debug(`Creating upload record for ${uuid}`)
-    const {lastInsertRowid} = db.prepare(`
-      INSERT INTO uploads (
-        uuid, inatId, projectId, user, obsJsonPath, apiToken, status, seq, updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, datetime())
-    `)
-    .run(
+    const {lastInsertRowid} = insertUploadRecord(
       uuid,
       validationResp.inatId,
       fields.projectId,
@@ -156,6 +162,8 @@ async function obsHandler(req, { isLocalDev }) {
       files.observation.filepath,
       req.headers['authorization'],
       seq,
+      JSON.stringify(fields['photos-delete'] || []),
+      JSON.stringify(fields['obsFields-delete'] || []),
     )
     const {uploadId} = db
       .prepare('SELECT uploadId FROM uploads WHERE rowid = ?')
@@ -171,16 +179,11 @@ async function obsHandler(req, { isLocalDev }) {
     })
   })
   t()
-  const serverUrlPrefix = (()=> {
-    const protocol = isLocalDev ? req.protocol : 'https'
-    return `${protocol}://${req.headers.host}`
-  })()
   const callbackMethod = 'POST'
-  const callbackUrl = `${serverUrlPrefix}${taskCallbackUrlPrefix}/${uuid}`
+  const {callbackUrl, statusUrl} = getTheUrls(req, isLocalDev, uuid)
   log.debug(`Callback URL will be: ${callbackMethod} ${callbackUrl}`)
-  const statusUrl = `${serverUrlPrefix}${taskStatusUrlPrefix}/${uuid}`
   log.debug(`Status URL will be: GET ${statusUrl}`)
-  await scheduleGcpTask(callbackUrl)
+  await scheduleGcpTask(callbackMethod, callbackUrl)
   const extra = isLocalDev ? {fields, files} : {}
   return {body: {
     ...extra,
@@ -191,6 +194,38 @@ async function obsHandler(req, { isLocalDev }) {
       callbackUrl,
     },
   }}
+}
+
+async function taskCallbackDeleteHandler(uuid, { axios, apiBaseUrl }) {
+  const { uploadId, inatId, apiToken, status } = getLatestUploadRecord(uuid)
+  if (status !== 'pending') {
+    return {body: {
+      isSuccess: true,
+      wasProcessed: false,
+    }}
+  }
+  try {
+    await axios.delete(`${apiBaseUrl}/v1/observations/${inatId}`, {
+      headers: { Authorization: apiToken }
+    })
+    setTerminalRecordStatus(uploadId, 'success')
+    return {body: {
+      isSuccess: true,
+      wasProcessed: true,
+    }}
+  } catch (err) {
+    const upstreamStatus = err.response?.status
+    if (upstreamStatus === 404) {
+      console.warn(`obs ${inatId} did not exist on iNat, nothing to do`)
+      setTerminalRecordStatus(uploadId, 'success')
+      return {body: {
+        isSuccess: true,
+        wasProcessed: false,
+      }}
+    }
+    const uploadDirPath = makeUploadDirPath(uuid, `delete.${Date.now()}`)
+    return handleUpstreamError(err, uploadId, uploadDirPath)
+  }
 }
 
 async function setupUploadDirForThisUuid(uuid) {
@@ -226,9 +261,14 @@ function asyncHandler(workerFn, extraParams) {
         createInatObs,
         updateInatObs,
       }
-      return dispatchables[fnName](wowContext, ...args)
+      const theFn = dispatchables[fnName]
+      if (!theFn) {
+        throw new Error(`Could not dispatch "${fnName}" function`)
+      }
+      return theFn(wowContext, ...args)
     }
-    workerFn(req, wowContext)
+    const firstParam = req.uuid || req
+    workerFn(firstParam, wowContext)
       .then(({status, body}) => {
         const elapsedMs = Date.now() - startMs
         const respBody = {
@@ -248,7 +288,7 @@ function asyncHandler(workerFn, extraParams) {
 
 function getLatestUploadRecord(uuid) {
   const result = getDb().prepare(`
-    SELECT uploadId, status, seq, inatId
+    SELECT *
     FROM uploads
     WHERE uuid = @uuid
     AND updatedAt = (
@@ -262,11 +302,10 @@ function getLatestUploadRecord(uuid) {
 
 // according to https://cloud.google.com/tasks/docs/tutorial-gcf
 // > Any status code other than 2xx or 503 will trigger the task to retry
-async function _taskCallbackHandler(req, { dispatch }) {
-  // FIXME need a shared secret for auth here
-  const {uuid} = req.params // FIXME validate?
+async function taskCallbackPostHandler(uuid, { dispatch }) {
   log.info(`Processing task callback for ${uuid}`)
-  const { uploadId, status, seq, inatId } = getLatestUploadRecord(uuid)
+  const uploadRecord = getLatestUploadRecord(uuid)
+  const { uploadId, status, seq, inatId } = uploadRecord
   if (!status) {
     return {status: 404, body: {msg: `${uuid} not found`}}
   }
@@ -282,55 +321,19 @@ async function _taskCallbackHandler(req, { dispatch }) {
     log.debug(`Uploading ${uuid} to iNat`)
     const isUpdate = !!inatId
     const sendToUpstreamFnName = isUpdate ? updateInatObs.name : createInatObs.name
-    const upstreamRespBody = await dispatch(sendToUpstreamFnName)
+    const upstreamRespBody = await dispatch(sendToUpstreamFnName, uploadRecord)
     const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
     log.debug(`Writing upstream resp body to file: ${upstreamRespBodyPath}`)
     await fsP.writeFile(upstreamRespBodyPath, JSON.stringify(upstreamRespBody))
     log.debug(`Upstream resp body written, cleaning up for ${uuid}`)
-    getDb().prepare(`
-      UPDATE uploads
-      SET
-        apiToken = NULL,
-        status = 'success',
-        updatedAt = datetime()
-      WHERE uploadId = ?
-    `).run(uploadId)
+    setTerminalRecordStatus(uploadId, 'success')
     log.info(`Successfully processed ${uuid}; ID=${upstreamRespBody.id}`)
     return {body: {
       isSuccess: true,
       wasProcessed: true,
     }}
   } catch (err) {
-    const upstreamStatus = (err.response || {}).status
-    const errorLogPath = makeErrorLogPath(uploadDirPath)
-    const errDump = err.stack || err.msg
-    await fsP.appendFile(
-      errorLogPath,
-      `[${new Date().toISOString()}] Status=${upstreamStatus}; err=${errDump}\n`,
-    )
-    if (upstreamStatus) {
-      log.error(
-        `Failed to upload to iNat with status=${upstreamStatus}.`,
-        err.response.data,
-      )
-    } else {
-      log.error('Failed to upload to iNat', err)
-    }
-    // FIXME how do we know when retries have been exhausted?
-    const isTerminalFailure = upstreamStatus === 401
-    if (isTerminalFailure) {
-      // FIXME remove apiToken from record
-      // FIXME update record status
-      const status = 200 // not success as such, but the task cannot be retried
-      const noRetryMsg = 'Above error was terminal, task will not be retried\n'
-      await fsP.appendFile(errorLogPath, noRetryMsg)
-      console.warn(noRetryMsg)
-      return {status, body: {isSuccess: false, canRetry: false}}
-    }
-    const status = 500 // will cause GCP Tasks to retry
-    // GCP probably doesn't care about the body, but as a dev calling the
-    // endpoint, it's useful to know what happened
-    return {status, body: {isSuccess: false, canRetry: true}}
+    return handleUpstreamError(err, uploadId, uploadDirPath)
   }
 }
 
@@ -358,7 +361,7 @@ function _validateCreate(fields, files) {
   }
 }
 
-function _validateEdit(...params) {
+function _validateEdit() {
   // FIXME validate photo IDs to delete
   // FIXME validate obs field IDs to delete
 }
@@ -396,14 +399,21 @@ async function validate(fields, files, uuid) {
   }
 }
 
-async function getUuidsWithPendingStatus(req) {
-  // FIXME add auth
+async function getUuidsWithPendingStatus() {
   const pendingUuids = getDb()
     .prepare("SELECT uuid, status FROM uploads")
     .all()
   return {body: {
     pendingUuids,
   }}
+}
+
+function getPhotosForUploadId(uploadId) {
+  return getDb().prepare(`
+    SELECT *
+    FROM photos
+    WHERE uploadId = ?
+  `).all(uploadId)
 }
 
 function getPhotosFromFiles(files) {
@@ -414,15 +424,14 @@ function getPhotosFromFiles(files) {
   return photos.constructor === Array ? files.photos : [files.photos]
 }
 
-async function createInatObs({axios, apiBaseUrl}, {projectId}, files, authHeader) {
-  // FIXME read stuff from DB, remove params
-  const photos = getPhotosFromFiles(files)
+async function createInatObs({axios, apiBaseUrl}, uploadRecord) {
+  const {uuid, uploadId, projectId, apiToken, obsJsonPath} = uploadRecord
+  const photos = getPhotosForUploadId(uploadId)
   log.debug(`Uploading ${photos.length} photos`)
   const photoResps = await Promise.all(photos.map(p => {
     const form = new FormData()
     const fileStream = fs.createReadStream(p.filepath)
     form.append('file', fileStream, {
-      filename: p.originalFilename,
       contentType: p.mimetype,
       knownLength: p.size,
     })
@@ -432,7 +441,7 @@ async function createInatObs({axios, apiBaseUrl}, {projectId}, files, authHeader
       {
         headers: {
           ...form.getHeaders(),
-          Authorization: authHeader,
+          Authorization: apiToken,
         }
       }
     )
@@ -442,7 +451,7 @@ async function createInatObs({axios, apiBaseUrl}, {projectId}, files, authHeader
   const photoIds = photoResps.map(e => e.data.id)
   log.debug(`Photo IDs from responses: ${photoIds}`)
   // FIXME handle ENOENT?
-  const obsJson = await readJsonFile(files.observation.filepath)
+  const obsJson = await readJsonFile(obsJsonPath)
   const obsBody = {
     observation: obsJson,
     local_photos: {
@@ -455,29 +464,25 @@ async function createInatObs({axios, apiBaseUrl}, {projectId}, files, authHeader
     ]
   }
   const resp = await axios.post(`${apiBaseUrl}/v1/observations`, obsBody, {
-    headers: { Authorization: authHeader }
+    headers: { Authorization: apiToken }
   })
   // FIXME check for, and handle, auth failures from upstream
-  log.debug(`iNat response status for ${obsJson.uuid}: ${resp.status}`)
+  log.debug(`iNat response status for POST ${uuid}: ${resp.status}`)
   return resp.data
 }
 
-async function updateInatObs({axios, apiBaseUrl}, fields, files, authHeader) {
-  // FIXME read stuff from DB, remove params
-  const obsJson = await readJsonFile(files.observation.filepath)
-  const inatRecordId = obsJson.id
-  if (!inatRecordId) {
-    log.error('Dumping observation JSON for error', obsJson)
+async function updateInatObs({axios, apiBaseUrl}, uploadRecord) {
+  const {uploadId, inatId, apiToken, obsJsonPath} = uploadRecord
+  if (!inatId) {
     throw new Error(`Could not find inat ID`)
   }
-  const photos = getPhotosFromFiles(files)
+  const photos = getPhotosForUploadId(uploadId)
   log.debug(`Processing ${photos.length} photos`)
   await Promise.all(photos.map(p => {
     const form = new FormData()
     const fileStream = fs.createReadStream(p.filepath)
-    form.append('observation_photo[observation_id]', inatRecordId)
+    form.append('observation_photo[observation_id]', inatId)
     form.append('file', fileStream, {
-      filename: p.originalFilename,
       contentType: p.mimetype,
       knownLength: p.size,
     })
@@ -488,46 +493,43 @@ async function updateInatObs({axios, apiBaseUrl}, fields, files, authHeader) {
       {
         headers: {
           ...form.getHeaders(),
-          Authorization: authHeader,
+          Authorization: apiToken,
         }
       }
     )
   }))
-  const photoIdsToDelete = JSON.parse(fields['photos-delete'])
+  const photoIdsToDelete = JSON.parse(uploadRecord.photoIdsToDelete)
   await Promise.all(photoIdsToDelete.map(id => {
     log.debug(`Deleting photo ${id}`)
     // FIXME check for, and handle, auth failures from upstream
     return axios.delete(
       `${apiBaseUrl}/v1/observation_photos/${id}`,
-      { headers: { Authorization: authHeader } }
+      { headers: { Authorization: apiToken } }
     )
   }))
-  const obsFieldIdsToDelete = JSON.parse(fields['obsFields-delete'])
+  const obsFieldIdsToDelete = JSON.parse(uploadRecord.obsFieldIdsToDelete)
   await Promise.all(obsFieldIdsToDelete.map(id => {
     log.debug(`Deleting obs field ${id}`)
     // FIXME check for, and handle, auth failures from upstream
     return axios.delete(
       `${apiBaseUrl}/v1/observation_field_values/${id}`,
-      { headers: { Authorization: authHeader } }
+      { headers: { Authorization: apiToken } }
     )
   }))
-  log.debug(`Updating observation with ID=${inatRecordId}`)
+  log.debug(`Updating observation with ID=${inatId}`)
+  const obsJson = await readJsonFile(obsJsonPath)
   const resp = await axios.put(
-    `${apiBaseUrl}/v1/observations/${inatRecordId}`,
+    `${apiBaseUrl}/v1/observations/${inatId}`,
     {
       // note: obs fields *not* included here are *not* implicitly deleted.
       observation: obsJson,
       ignore_photos: true,
     },
-    { headers: { Authorization: authHeader } }
+    { headers: { Authorization: apiToken } }
   )
   // FIXME check for, and handle, auth failures from upstream
-  log.debug(`iNat response status for ${inatRecordId}: ${resp.status}`)
+  log.debug(`iNat response status for PUT ${inatId}: ${resp.status}`)
   return resp.data
-}
-
-function makeSemaphorePath(basePath) {
-  return path.join(basePath, 'semaphore.txt')
 }
 
 function makeErrorLogPath(basePath) {
@@ -565,12 +567,14 @@ async function scheduleGcpTask(httpMethod, url) {
     httpRequest: {
       httpMethod,
       url,
-      // FIXME can we set a header in here? Or just use body?
+      headers: {
+        'Authorization': wowConfig().callbackSecret,
+      },
     },
   }
-  log.debug(`Scheduling callback task for ${url}`)
+  log.debug(`Scheduling callback task for ${httpMethod} ${url}`)
   await client.createTask({parent: parent, task: task})
-  log.debug('Task scheduled')
+  log.debug(`Task scheduled for ${httpMethod} ${url}`)
 }
 
 async function authMiddleware(req, res, next) {
@@ -608,6 +612,83 @@ function isUuid(uuid) {
   return uuid.match(uuidRegex)
 }
 
+function getTheUrls(req, isLocalDev, uuid) {
+  const serverUrlPrefix = (()=> {
+    const protocol = isLocalDev ? req.protocol : 'https'
+    return `${protocol}://${req.headers.host}`
+  })()
+  const callbackUrl = `${serverUrlPrefix}${taskCallbackUrlPrefix}/${uuid}`
+  const statusUrl = `${serverUrlPrefix}${taskStatusUrlPrefix}/${uuid}`
+  return {callbackUrl, statusUrl}
+}
+
+function markSuperseded(db, uuid) {
+  const {changes} = db.prepare(`
+    UPDATE uploads
+    SET status = 'superseded',
+    updatedAt = datetime()
+    WHERE uuid = ?
+    AND status = 'pending'
+  `).run(uuid)
+  log.debug(`Marked ${changes} old ${uuid} records as superseded`)
+}
+
+function setTerminalRecordStatus(uploadId, status) {
+  getDb().prepare(`
+    UPDATE uploads
+    SET
+      apiToken = NULL,
+      status = @status,
+      updatedAt = datetime()
+    WHERE uploadId = @uploadId
+  `).run({uploadId, status})
+}
+
+function insertUploadRecord(...params) {
+  debugger // FIXME delete line
+  return getDb().prepare(`
+    INSERT INTO uploads (
+      uuid, inatId, projectId, user, obsJsonPath, apiToken, status, seq,
+      updatedAt, photoIdsToDelete, obsFieldIdsToDelete
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, 'pending', ?, datetime(), ?, ?
+    )
+  `)
+  .run(...params)
+}
+
+async function handleUpstreamError(err, uploadId, uploadDirPath) {
+  const upstreamStatus = err.response?.status
+  const errorLogPath = makeErrorLogPath(uploadDirPath)
+  const errDump = err.stack || err.msg
+  await fsP.appendFile(
+    errorLogPath,
+    `[${new Date().toISOString()}] Status=${upstreamStatus}; err=${errDump}\n`,
+  )
+  if (upstreamStatus) {
+    log.error(
+      `Request to iNat failed with status=${upstreamStatus}.`,
+      err.response.data,
+    )
+  } else {
+    log.error('Request to iNat failed', err)
+  }
+  // FIXME how do we know when retries have been exhausted?
+  const isTerminalFailure = upstreamStatus === 401
+  if (isTerminalFailure) {
+    setTerminalRecordStatus(uploadId, 'failure')
+    const status = 200 // not success as such, but the task cannot be retried
+    const noRetryMsg = 'Above error was terminal, task will not be retried\n'
+    await fsP.appendFile(errorLogPath, noRetryMsg)
+    console.warn(noRetryMsg)
+    return {status, body: {isSuccess: false, canRetry: false}}
+  }
+  const status = 500 // will cause GCP Tasks to retry
+  // GCP probably doesn't care about the body, but as a dev calling the
+  // endpoint, it's useful to know what happened
+  return {status, body: {isSuccess: false, canRetry: true}}
+}
+
 function initDb() {
   const db = getDb()
   try {
@@ -630,9 +711,9 @@ function initDb() {
           apiToken TEXT,
           status TEXT,
           seq INT,
-          updatedAt INT
-          -- FIXME do we need user email column?
-          -- FIXME do we need method column?
+          updatedAt INT,
+          photoIdsToDelete TEXT,
+          obsFieldIdsToDelete TEXT
         )
       `).run()
       db.prepare(`
@@ -653,17 +734,30 @@ function initDb() {
 module.exports = {
   initDb,
   getUuidsWithPendingStatus: asyncHandler(getUuidsWithPendingStatus),
-  obsHandler: asyncHandler(obsHandler),
+  obsUpsertHandler: asyncHandler(obsUpsertHandler),
+  obsDeleteHandler: asyncHandler(obsDeleteHandler),
   obsTaskStatusHandler: asyncHandler(_obsTaskStatusHandler),
-  obsDeleteStatusHandler: asyncHandler(_obsDeleteStatusHandler),
-  taskCallbackPostHandler: asyncHandler(_taskCallbackHandler, { // FIXME
-    sendToUpstreamFnName: createInatObs.name,
-  }),
-  taskCallbackPutHandler: asyncHandler(_taskCallbackHandler, {
-    sendToUpstreamFnName: updateInatObs.name,
-  }),
+  taskCallbackPostHandler: asyncHandler(taskCallbackPostHandler),
+  taskCallbackDeleteHandler: asyncHandler(taskCallbackDeleteHandler),
   authMiddleware,
   _testonly: {
-    _obsDeleteStatusHandler,
+    getDb,
+    insertUploadRecord,
+    setTerminalRecordStatus,
   },
+  taskCallbackMiddleware: (req, res, next) => {
+    if (!isCallbackAuthValid(req)) {
+      return res
+        .status(403)
+        .send(JSON.stringify({msg: 'auth invalid'}))
+    }
+    const {uuid} = req.params
+    if (!isUuid(uuid)) {
+      return res
+        .status(400)
+        .send(JSON.stringify({error: `uuid path param is NOT valid`}))
+    }
+    req.uuid = uuid
+    return next()
+  }
 }

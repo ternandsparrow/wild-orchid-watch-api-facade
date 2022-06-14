@@ -12,16 +12,18 @@ const {
   authMiddleware: userAuthMiddleware,
   getUuidsWithPendingStatus,
   initDb,
-  obsDeleteStatusHandler,
-  obsHandler,
+  obsDeleteHandler,
+  obsUpsertHandler,
   obsTaskStatusHandler,
+  taskCallbackDeleteHandler,
+  taskCallbackMiddleware,
   taskCallbackPostHandler,
 } = require('./src/data-producers.js')
 
 const uuidPathMatcher = ':uuid([0-9a-fA-F-]+)'
 const obsUploadUrl = `/observations/${uuidPathMatcher}`
-const deleteStatusUrl = `/task-status/:inatId([0-9]+)/delete`
-const otherStatusUrl = `${taskStatusUrlPrefix}/${uuidPathMatcher}`
+const obsDeleteUrl = `/observations/:inatId([0-9]+)/${uuidPathMatcher}`
+const statusUrl = `${taskStatusUrlPrefix}/${uuidPathMatcher}`
 const app = express()
 const port = process.env.PORT || 3000
 
@@ -47,26 +49,23 @@ log.info(`Started; running version ${wowConfig().gitSha}`)
 
 app.get('/wow-observations', dataConsumerObservationsHandler)
 
-const corsMiddleware = cors({methods: ['POST']})
+const corsMiddleware = cors({methods: ['POST', 'DELETE']})
 app.options(obsUploadUrl, corsMiddleware)
-app.options(deleteStatusUrl, corsMiddleware)
-app.options(otherStatusUrl, corsMiddleware)
+app.options(statusUrl, corsMiddleware)
 
-app.post(obsUploadUrl, corsMiddleware, userAuthMiddleware, obsHandler)
+// only one endpoint for create and update. The facade figures out what type of
+// req to send to iNat. Keeps the client simple.
+app.post(obsUploadUrl, corsMiddleware, userAuthMiddleware, obsUpsertHandler)
+app.delete(obsDeleteUrl, corsMiddleware, userAuthMiddleware, obsDeleteHandler)
 
-// FIXME future enhancement idea: add a PATCH handler that just updates the
-//   apiToken and enqueues the task again
+// poll progress of create, update or delete task
+app.get(statusUrl, corsMiddleware, userAuthMiddleware, obsTaskStatusHandler)
 
-// FIXME add delete endpoint
-
-// FIXME unify to one endpoint
-// poll upstream to see if delete has happened
-app.get(deleteStatusUrl, corsMiddleware, obsDeleteStatusHandler)
-// poll progress of create or update task
-app.get(otherStatusUrl, corsMiddleware, userAuthMiddleware, obsTaskStatusHandler)
-
-// endpoint for task queue to call
-app.post(`${taskCallbackUrlPrefix}/${uuidPathMatcher}`, taskCallbackPostHandler)
+// endpoints for task queue to call
+app.post(`${taskCallbackUrlPrefix}/${uuidPathMatcher}`, taskCallbackMiddleware,
+  taskCallbackPostHandler)
+app.delete(`${taskCallbackUrlPrefix}/${uuidPathMatcher}`, taskCallbackMiddleware,
+  taskCallbackDeleteHandler)
 
 app.get('/ops/task-statuses', getUuidsWithPendingStatus)
 

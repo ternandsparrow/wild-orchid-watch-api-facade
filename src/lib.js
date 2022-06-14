@@ -12,6 +12,8 @@ const log = {
   error: makeLogger('ERROR', 'error'),
 }
 
+const defaultInatUrl = 'https://dev.inat.techotom.com'
+const defaultInatApiUrl = 'https://dev.api.inat.techotom.com'
 let cachedConfig = null
 
 function wowConfig() {
@@ -20,10 +22,8 @@ function wowConfig() {
   }
   const localDevEnvName = 'local-dev'
   const result = {
-    inatBaseUrl:
-    getUrlEnvVar('INAT_PREFIX') || 'https://dev.inat.techotom.com',
-    apiBaseUrl:
-    getUrlEnvVar('INAT_API_PREFIX') || 'https://dev.api.inat.techotom.com',
+    inatBaseUrl: getUrlEnvVar('INAT_PREFIX') || defaultInatUrl,
+    apiBaseUrl: getUrlEnvVar('INAT_API_PREFIX') || defaultInatApiUrl,
     gitSha: process.env.GIT_SHA || '(nothing)',
     rootUploadDirPath: process.env.UPLOAD_DIR_PATH || './uploads',
     // the WOW project identifier. Slug is the fragment of URL, e.g.
@@ -43,6 +43,7 @@ function wowConfig() {
     gcpRegion: process.env.GCP_REGION || 'us-west1',
     gcpProject: process.env.GCP_PROJECT,
     gcpQueue: process.env.GCP_QUEUE,
+    callbackSecret: process.env.CALLBACK_SECRET || '',
   }
   result.isLocalDev = result.deployedEnvName === localDevEnvName
 

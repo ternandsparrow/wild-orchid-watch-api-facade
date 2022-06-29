@@ -138,6 +138,13 @@ async function obsUpsertHandler(req, { isLocalDev }) {
       if (err) {
         return reject(err)
       }
+      if (!files.photos) {
+        files.photos = []
+      }
+      if (files.photos.constructor !== Array) {
+        log.debug('Single photo sent, converting to array')
+        files.photos = [files.photos]
+      }
       return resolve({fields, files})
     })
   })
@@ -151,14 +158,10 @@ async function obsUpsertHandler(req, { isLocalDev }) {
   log.info(`Parsed and validated request with ${
     Object.keys(fields).length} fields and ${Object.keys(files).length} files`)
   const db = getDb()
-  const stmt = db.prepare(
-    'INSERT INTO photos (size, filepath, mimetype, uploadId) ' +
-    'VALUES (?, ?, ?, ?)'
-  )
   const t = db.transaction(() => {
     markSuperseded(db, uuid)
     log.debug(`Creating upload record for ${uuid}`)
-    const {lastInsertRowid} = insertUploadRecord(
+    const uploadId = insertUploadRecord(
       uuid,
       validationResp.inatId,
       fields.projectId,
@@ -169,14 +172,15 @@ async function obsUpsertHandler(req, { isLocalDev }) {
       fields['photos-delete'] || '[]',
       fields['obsFields-delete'] || '[]',
     )
-    const {uploadId} = db
-      .prepare('SELECT uploadId FROM uploads WHERE rowid = ?')
-      .get(lastInsertRowid)
     log.debug(`upload for ${uuid} has id=${uploadId}`)
-    for (const p of (files.photos || [])) {
+    const stmt = db.prepare(
+      'INSERT INTO photos (size, filepath, mimetype, uploadId) ' +
+      'VALUES (?, ?, ?, ?)'
+    )
+    files.photos.forEach(p => {
       log.debug(`Creating photo record for ${p.filepath}`)
       stmt.run(p.size, p.filepath, p.mimetype, uploadId)
-    }
+    })
   })
   t()
   const callbackMethod = 'POST'
@@ -205,9 +209,15 @@ async function taskCallbackDeleteHandler(uuid, { axios, apiBaseUrl }) {
     }}
   }
   try {
-    await axios.delete(`${apiBaseUrl}/v1/observations/${inatId}`, {
-      headers: { Authorization: apiToken }
-    })
+    if (inatId) {
+      // a "create" followed immediately by a "delete" won't have an inatId
+      // because it hasn't landed on inatId yet.
+      await axios.delete(`${apiBaseUrl}/v1/observations/${inatId}`, {
+        headers: { Authorization: apiToken }
+      })
+    } else {
+      log.debug(`No inatId for upload=${uploadId}, no need to talk to iNat`)
+    }
     setTerminalRecordStatus(uploadId, 'success')
     return {body: {
       isSuccess: true,
@@ -287,13 +297,28 @@ function asyncHandler(workerFn, extraParams) {
 }
 
 function getLatestUploadRecord(uuid) {
-  const result = getDb().prepare(`
+  const db = getDb()
+  const result = db.prepare(`
     SELECT *
     FROM uploads
     WHERE uuid = @uuid
-    ORDER BY seq DESC
+    ORDER BY rowId DESC
     LIMIT 1
   `).get({uuid})
+  if (result && !result.inatId) {
+    // look up inatId not known at task creation time, but *is* known now
+    const resultSet = db.prepare(`
+      SELECT inatId
+      FROM uploads
+      WHERE uuid = @uuid
+      AND inatId IS NOT NULL
+      LIMIT 1
+    `).get({uuid})
+    if (resultSet?.inatId) {
+      log.debug(`Found inatId=${resultSet.inatId} using lookback for uuid=${uuid}`)
+      result.inatId = resultSet.inatId
+    }
+  }
   return result || {}
 }
 
@@ -323,7 +348,7 @@ async function taskCallbackPostHandler(uuid, { dispatch }) {
     log.debug(`Writing upstream resp body to file: ${upstreamRespBodyPath}`)
     await fsP.writeFile(upstreamRespBodyPath, JSON.stringify(upstreamRespBody))
     log.debug(`Upstream resp body written, cleaning up for ${uuid}`)
-    setTerminalRecordStatus(uploadId, 'success')
+    setTerminalRecordStatus(uploadId, 'success', upstreamRespBody.id)
     log.info(`Successfully processed ${uuid}; ID=${upstreamRespBody.id}`)
     return {body: {
       isSuccess: true,
@@ -633,19 +658,28 @@ function markSuperseded(db, uuid) {
   log.debug(`Marked ${changes} old ${uuid} records as superseded`)
 }
 
-function setTerminalRecordStatus(uploadId, status) {
+function setTerminalRecordStatus(uploadId, status, inatId) {
+  const inatIdFragment = (() => {
+    if (!inatId) {
+      return ''
+    }
+    log.debug(`Updating inatId=${inatId} for upload=${uploadId}`)
+    return `inatId = @inatId,`
+  })()
   getDb().prepare(`
     UPDATE uploads
     SET
       apiToken = NULL,
       status = @status,
+      ${inatIdFragment}
       updatedAt = datetime()
     WHERE uploadId = @uploadId
-  `).run({uploadId, status})
+  `).run({uploadId, status, inatId})
 }
 
 function insertUploadRecord(...params) {
-  return getDb().prepare(`
+  const db = getDb()
+  const {lastInsertRowid} = db.prepare(`
     INSERT INTO uploads (
       uuid, inatId, projectId, user, obsJsonPath, apiToken, status, seq,
       updatedAt, photoIdsToDelete, obsFieldIdsToDelete
@@ -654,6 +688,10 @@ function insertUploadRecord(...params) {
     )
   `)
   .run(...params)
+  const {uploadId} = db
+    .prepare('SELECT uploadId FROM uploads WHERE rowid = ?')
+    .get(lastInsertRowid)
+  return uploadId
 }
 
 async function handleUpstreamError(err, uploadId, uploadDirPath) {

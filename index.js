@@ -51,6 +51,7 @@ app.get('/wow-observations', dataConsumerObservationsHandler)
 
 const corsMiddleware = cors({methods: ['GET', 'POST', 'DELETE']})
 app.options(obsUploadUrl, corsMiddleware)
+app.options(obsDeleteUrl, corsMiddleware)
 app.options(statusUrl, corsMiddleware)
 
 // only one endpoint for create and update. The facade figures out what type of

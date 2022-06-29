@@ -5,10 +5,10 @@ const Sentry = require('@sentry/node')
 const noop = function() {}
 const logLevel = process.env.LOG_LEVEL || 'INFO'
 const log = {
-  trace: logLevel === 'TRACE' ? makeLogger('TRACE', 'log') : noop,
+  trace: ['TRACE'].includes(logLevel) ? makeLogger('TRACE', 'log') : noop,
   debug: ['TRACE', 'DEBUG'].includes(logLevel) ? makeLogger('DEBUG', 'log') : noop,
-  info: makeLogger('INFO', 'info'),
-  warn: makeLogger('WARN', 'warn'),
+  info: ['INFO', 'TRACE', 'DEBUG'].includes(logLevel) ? makeLogger('INFO', 'info') : noop,
+  warn: ['WARN', 'INFO', 'TRACE', 'DEBUG'].includes(logLevel) ? makeLogger('WARN', 'warn') : noop,
   error: makeLogger('ERROR', 'error'),
 }
 

@@ -10,8 +10,8 @@
     "docker:build": "./.docker-cmd-helper build",
     "docker:run": "./.docker-cmd-helper run",
     "docker:shell": "./.docker-cmd-helper shell",
-    "test": "DB_PATH=:memory: jest",
-    "test:debug": "DB_PATH=:memory: node --inspect-brk ./node_modules/.bin/jest --runInBand"
+    "test": "DB_PATH=:memory: LOG_LEVEL=ERROR jest",
+    "test:debug": "DB_PATH=:memory: LOG_LEVEL=ERROR node --inspect-brk ./node_modules/.bin/jest --runInBand"
   },
   "dependencies": {
     "@google-cloud/tasks": "^2.5.0",

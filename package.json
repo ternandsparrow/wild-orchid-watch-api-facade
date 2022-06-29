@@ -10,12 +10,14 @@
     "docker:build": "./.docker-cmd-helper build",
     "docker:run": "./.docker-cmd-helper run",
     "docker:shell": "./.docker-cmd-helper shell",
-    "test": "jest"
+    "test": "DB_PATH=:memory: LOG_LEVEL=ERROR jest",
+    "test:debug": "DB_PATH=:memory: LOG_LEVEL=ERROR node --inspect-brk ./node_modules/.bin/jest --runInBand"
   },
   "dependencies": {
     "@google-cloud/tasks": "^2.5.0",
     "@sentry/node": "^5.26.0",
     "axios": "^0.20.0",
+    "better-sqlite3": "^7.5.3",
     "cors": "^2.8.5",
     "dotenv": "^16.0.0",
     "express": "^4.17.1",

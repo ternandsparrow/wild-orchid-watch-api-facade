@@ -1,29 +1,27 @@
-const {fail} = require('jest')
-const objectUnderTest = require('../src/data-producers.js')._testonly
+const {initDb, _testonly: objectUnderTest} = require('../src/data-producers.js')
 
-describe('_obsDeleteStatusHandler', () => {
-  test('handles "success" situation', async () => {
-    const req = {params: {inatId: '123'}}
-    const axios = {get: async () => ({data: {total_results: 0}})}
-    const result = await objectUnderTest._obsDeleteStatusHandler(req, {axios, apiBaseUrl: 'z'})
-    expect(result.body.taskStatus).toBe('success')
+describe('setTerminalRecordStatus', () => {
+  beforeAll(() => {
+    initDb()
   })
 
-  test('handles "processing" situation', async () => {
-    const req = {params: {inatId: '123'}}
-    const axios = {get: async () => ({data: {total_results: 1}})}
-    const result = await objectUnderTest._obsDeleteStatusHandler(req, {axios, apiBaseUrl: 'z'})
-    expect(result.body.taskStatus).toBe('processing')
-  })
-
-  test('handles "failure" situation', async () => {
-    const req = {params: {inatId: '123'}}
-    const axios = {get: async () => {throw new Error('bang')}}
-    try {
-      await objectUnderTest._obsDeleteStatusHandler(req, {axios, apiBaseUrl: 'z'})
-      fail()
-    } catch (err) {
-      expect(err.message).toBe('bang')
-    }
+  test('handles "success" status', async () => {
+    const uploadId = objectUnderTest.insertUploadRecord(
+      '123A', // uuid
+      11,     // inatId,
+      null,   // projectId
+      'user', // user
+      '/some/path.json',
+      'ey...',// auth
+      456,    // seq
+      '[]',   // photo IDs to delete
+      '[]',   // obs field IDs to delete
+    )
+    objectUnderTest.setTerminalRecordStatus(uploadId, 'success')
+    const result = objectUnderTest.getDb()
+      .prepare('SELECT * FROM uploads WHERE uuid = ?')
+      .get('123A')
+    expect(result.status).toBe('success')
+    expect(result.apiToken).toBe(null)
   })
 })

@@ -49,7 +49,7 @@ log.info(`Started; running version ${wowConfig().gitSha}`)
 
 app.get('/wow-observations', dataConsumerObservationsHandler)
 
-const corsMiddleware = cors({methods: ['POST', 'DELETE']})
+const corsMiddleware = cors({methods: ['GET', 'POST', 'DELETE']})
 app.options(obsUploadUrl, corsMiddleware)
 app.options(statusUrl, corsMiddleware)
 

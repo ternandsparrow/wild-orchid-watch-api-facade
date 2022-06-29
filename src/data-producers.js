@@ -151,6 +151,10 @@ async function obsUpsertHandler(req, { isLocalDev }) {
   log.info(`Parsed and validated request with ${
     Object.keys(fields).length} fields and ${Object.keys(files).length} files`)
   const db = getDb()
+  const stmt = db.prepare(
+    'INSERT INTO photos (size, filepath, mimetype, uploadId) ' +
+    'VALUES (?, ?, ?, ?)'
+  )
   const t = db.transaction(() => {
     markSuperseded(db, uuid)
     log.debug(`Creating upload record for ${uuid}`)
@@ -162,21 +166,17 @@ async function obsUpsertHandler(req, { isLocalDev }) {
       files.observation.filepath,
       req.headers['authorization'],
       seq,
-      JSON.stringify(fields['photos-delete'] || []),
-      JSON.stringify(fields['obsFields-delete'] || []),
+      fields['photos-delete'] || '[]',
+      fields['obsFields-delete'] || '[]',
     )
     const {uploadId} = db
       .prepare('SELECT uploadId FROM uploads WHERE rowid = ?')
       .get(lastInsertRowid)
     log.debug(`upload for ${uuid} has id=${uploadId}`)
-    const stmt = db.prepare(
-      'INSERT INTO photos (size, filepath, mimetype, uploadId) ' +
-      'VALUES (?, ?, ?, ?)'
-    )
-    files.photos.forEach(p => {
+    for (const p of (files.photos || [])) {
       log.debug(`Creating photo record for ${p.filepath}`)
       stmt.run(p.size, p.filepath, p.mimetype, uploadId)
-    })
+    }
   })
   t()
   const callbackMethod = 'POST'
@@ -291,11 +291,8 @@ function getLatestUploadRecord(uuid) {
     SELECT *
     FROM uploads
     WHERE uuid = @uuid
-    AND updatedAt = (
-      SELECT max(updatedAt)
-      FROM uploads
-      WHERE uuid = @uuid
-    )
+    ORDER BY seq DESC
+    LIMIT 1
   `).get({uuid})
   return result || {}
 }
@@ -446,7 +443,6 @@ async function createInatObs({axios, apiBaseUrl}, uploadRecord) {
       }
     )
   }))
-  // FIXME check for, and handle, auth failures from upstream
   // FIXME catch image post error, like an image/* that iNat doesn't like
   const photoIds = photoResps.map(e => e.data.id)
   log.debug(`Photo IDs from responses: ${photoIds}`)
@@ -477,7 +473,7 @@ async function updateInatObs({axios, apiBaseUrl}, uploadRecord) {
     throw new Error(`Could not find inat ID`)
   }
   const photos = getPhotosForUploadId(uploadId)
-  log.debug(`Processing ${photos.length} photos`)
+  log.debug(`Processing ${photos.length} photos for upload ${uploadId}`)
   await Promise.all(photos.map(p => {
     const form = new FormData()
     const fileStream = fs.createReadStream(p.filepath)
@@ -499,6 +495,7 @@ async function updateInatObs({axios, apiBaseUrl}, uploadRecord) {
     )
   }))
   const photoIdsToDelete = JSON.parse(uploadRecord.photoIdsToDelete)
+  log.debug(`Deleting ${photoIdsToDelete.length} photos for upload ${uploadId}`)
   await Promise.all(photoIdsToDelete.map(id => {
     log.debug(`Deleting photo ${id}`)
     // FIXME check for, and handle, auth failures from upstream
@@ -508,6 +505,7 @@ async function updateInatObs({axios, apiBaseUrl}, uploadRecord) {
     )
   }))
   const obsFieldIdsToDelete = JSON.parse(uploadRecord.obsFieldIdsToDelete)
+  log.debug(`Deleting ${obsFieldIdsToDelete.length} obs fields for upload ${uploadId}`)
   await Promise.all(obsFieldIdsToDelete.map(id => {
     log.debug(`Deleting obs field ${id}`)
     // FIXME check for, and handle, auth failures from upstream
@@ -625,8 +623,10 @@ function getTheUrls(req, isLocalDev, uuid) {
 function markSuperseded(db, uuid) {
   const {changes} = db.prepare(`
     UPDATE uploads
-    SET status = 'superseded',
-    updatedAt = datetime()
+    SET
+      apiToken = NULL,
+      status = 'superseded',
+      updatedAt = datetime()
     WHERE uuid = ?
     AND status = 'pending'
   `).run(uuid)
@@ -645,7 +645,6 @@ function setTerminalRecordStatus(uploadId, status) {
 }
 
 function insertUploadRecord(...params) {
-  debugger // FIXME delete line
   return getDb().prepare(`
     INSERT INTO uploads (
       uuid, inatId, projectId, user, obsJsonPath, apiToken, status, seq,

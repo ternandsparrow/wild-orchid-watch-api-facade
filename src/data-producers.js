@@ -12,6 +12,7 @@ const betterSqlite3 = require('better-sqlite3')
 const {CloudTasksClient} = require('@google-cloud/tasks')
 const {
   log,
+  Sentry,
   taskCallbackUrlPrefix,
   taskStatusUrlPrefix,
   wowConfig,
@@ -278,6 +279,9 @@ function asyncHandler(workerFn, extraParams) {
       return theFn(wowContext, ...args)
     }
     const firstParam = req.uuid || req
+    const transaction = Sentry.startTransaction({
+      op: workerFn.name,
+    })
     workerFn(firstParam, wowContext)
       .then(({status, body}) => {
         const elapsedMs = Date.now() - startMs
@@ -289,8 +293,8 @@ function asyncHandler(workerFn, extraParams) {
         return res.status(status || 200).send(respBody)
       })
       .catch(err => {
-        // FIXME send to Sentry
         log.error(`Error while running function ${workerFn.name}`, err)
+        Sentry.captureException(err)
         res.status(500).send({error: 'The server exploded :('})
       })
   }
@@ -406,7 +410,7 @@ async function validate(fields, files, uuid) {
   }
   // FIXME should we validate further, so HEIC, etc images are disallowed?
   const validationError = (() => {
-    const isUpdate = !!observation.id
+    const isUpdate = isUploadExistsForUuid(obsUuid)
     if (isUpdate) {
       return _validateEdit(fields, files)
     }
@@ -421,7 +425,18 @@ async function validate(fields, files, uuid) {
   }
 }
 
-async function getUuidsWithPendingStatus() {
+function isUploadExistsForUuid(theUuid) {
+  const db = getDb()
+  const queryResult = db.prepare(`
+    SELECT 1
+    FROM uploads
+    WHERE uuid = @uuid
+    LIMIT 1
+  `).get({uuid: theUuid})
+  return !!queryResult
+}
+
+function getUuidsWithPendingStatus() {
   const pendingUuids = getDb()
     .prepare("SELECT uuid, status FROM uploads")
     .all()

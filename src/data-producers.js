@@ -439,10 +439,22 @@ function isUploadExistsForUuid(theUuid) {
   return !!queryResult
 }
 
-function getUuidsWithPendingStatus() {
+function getUuidsWithPendingStatus(req) {
+  const {all} = req.query
+  const limitClause = (() => {
+    if (all === 'true') {
+      return ''
+    }
+    return 'LIMIT 100'
+  })()
   const pendingUuids = getDb()
-    .prepare("SELECT uuid, status FROM uploads")
-    .all()
+    .prepare(`
+      SELECT uuid, status
+      FROM uploads
+      WHERE status = 'pending'
+      ORDER BY updatedAt DESC
+      ${limitClause}
+    `).all()
   // asyncHandler wrapped functions must return promises
   return Promise.resolve({body: {
     pendingUuids,

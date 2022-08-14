@@ -297,6 +297,9 @@ function asyncHandler(workerFn, extraParams) {
         Sentry.captureException(err)
         res.status(500).send({error: 'The server exploded :('})
       })
+      .finally(() => {
+        transaction.finish()
+      })
   }
 }
 

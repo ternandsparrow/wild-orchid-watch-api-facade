@@ -338,6 +338,10 @@ async function taskCallbackPostHandler(uuid, { dispatch }) {
   if (!status) {
     return {status: 404, body: {msg: `${uuid} not found`}}
   }
+  const isNotAnUpdateRecord = !seq
+  if (isNotAnUpdateRecord) {
+    return {status: 400, body: {msg: `${uuid} is not an update record`}}
+  }
   const isAlreadyProcessed = ['success', 'failure'].includes(status)
   if (isAlreadyProcessed) {
     return {body: {

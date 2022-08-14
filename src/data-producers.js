@@ -443,9 +443,10 @@ function getUuidsWithPendingStatus() {
   const pendingUuids = getDb()
     .prepare("SELECT uuid, status FROM uploads")
     .all()
-  return {body: {
+  // asyncHandler wrapped functions must return promises
+  return Promise.resolve({body: {
     pendingUuids,
-  }}
+  }})
 }
 
 function getPhotosForUploadId(uploadId) {

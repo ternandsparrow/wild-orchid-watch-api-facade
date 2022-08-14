@@ -1,5 +1,10 @@
 # intended to be sourced
 set -euxo pipefail
+
+if [ -n "${CIRCLE_JOB:-}" ]; then
+  echo "hiding sensitive stuff from CircleCI logs"
+  set +x
+fi
 keyFile=$HOME/gcloud-service-key.json
 echo ${GCP_PROJECT_KEY:?} | base64 --decode --ignore-garbage > $keyFile
 
@@ -16,5 +21,5 @@ export IMAGE_PREFIX=gcr.io/$GOOGLE_PROJECT_ID/$IMAGE_NAME
 IMAGE_TAG=${CIRCLE_SHA1:?}
 echo "export IMAGE_TAG=$IMAGE_TAG" >> $BASH_ENV
 echo "export IMAGE_FULL=$IMAGE_PREFIX:$IMAGE_TAG" >> $BASH_ENV
-cat $BASH_ENV
+cat $BASH_ENV # relax doesn't leak keys in logs
 source $BASH_ENV

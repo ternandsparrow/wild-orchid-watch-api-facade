@@ -47,7 +47,7 @@ jobs:
       - run:
           name: Push image to GCR
           command: |
-            # print as base64 to side-step secret obfuscation; for debugging
+            echo "printing image ID as base64 to side-step secret obfuscation; for debugging"
             echo $IMAGE_FULL | base64 -w0; echo ''
             docker push $IMAGE_FULL
   deploy_master:

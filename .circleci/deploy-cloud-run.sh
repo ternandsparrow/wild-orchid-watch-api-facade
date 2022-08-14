@@ -38,6 +38,11 @@ function getOptionalEnvParam {
 
 # FIXME could mount GCP JSON key as a file, so we don't have to base64 decode
 
+if [ -n "${CIRCLE_JOB:-}" ]; then
+  echo "hiding sensitive stuff from CircleCI logs"
+  set +x
+fi
+
 # build set-env-vars value in a more readable way
 ZZ=" $(getOptionalEnvParam INAT_API_PREFIX ${secretPrefix})"
 ZZ+="$(getOptionalEnvParam INAT_PREFIX ${secretPrefix})"
@@ -70,6 +75,7 @@ gcloud beta run deploy $GCP_SERVICE_NAME \
   --revision-suffix=${IMAGE_TAG:?} \
   --max-instances=2 \
   --set-env-vars $ZZ
+set -x
 
 echo
 echo "Service deployed"

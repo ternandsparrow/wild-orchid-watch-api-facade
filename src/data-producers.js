@@ -44,6 +44,12 @@ async function _obsTaskStatusHandler(req) {
     }
   }
   const {seq, status} = getLatestUploadRecord(uuid)
+  if (!seq) {
+    return {
+      status: 404,
+      body: {error: `${uuid} doesn't exit`},
+    }
+  }
   const uploadDirPath = makeUploadDirPath(uuid, seq)
   const upstreamRespBodyPath = makeUpstreamBodyPath(uploadDirPath)
   const upstreamBody = await (async () => {
@@ -406,7 +412,7 @@ async function validate(fields, files, uuid) {
   if (files.observation.mimetype !== 'application/json') {
     return '`observation` file must be `application/json`'
   }
-  const observation  = await readJsonFile(files.observation.filepath)
+  const observation = await readJsonFile(files.observation.filepath)
   const obsUuid = observation.uuid
   if (obsUuid !== uuid) {
     return `UUID mismatch! "${uuid}" in URL path and "${obsUuid}" in body`
@@ -417,7 +423,7 @@ async function validate(fields, files, uuid) {
   }
   // FIXME should we validate further, so HEIC, etc images are disallowed?
   const validationError = (() => {
-    const isUpdate = isUploadExistsForUuid(obsUuid)
+    const isUpdate = isUploadExistsForUuid(obsUuid) || !!observation.id
     if (isUpdate) {
       return _validateEdit(fields, files)
     }

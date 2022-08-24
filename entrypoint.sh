@@ -42,4 +42,18 @@ echo "Mounting completed."
 # FIXME using fuse as a non-root user should work; it's the whole point! It
 # doesn't seem to though. So we're forced to run as root :'(
 
-node .
+cat <<HEREDOC > /etc/litestream.yml
+dbs:
+  - path: $DB_PATH
+    replicas:
+      - url: gcs://$GCS_BUCKET/wowfacade.db
+HEREDOC
+
+if [ -f "$DB_PATH" ]; then
+  echo "Database already exists, skipping restore"
+else
+  echo "No database found, restoring from replica if exists"
+  litestream restore -v -if-replica-exists "$DB_PATH"
+fi
+
+exec litestream replicate --exec 'node .'

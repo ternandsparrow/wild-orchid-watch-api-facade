@@ -11,3 +11,4 @@ npm-debug.log
 tests/
 .env*
 yarn-error.log
+uploads

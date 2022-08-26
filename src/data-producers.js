@@ -44,7 +44,7 @@ async function _obsTaskStatusHandler(req) {
     }
   }
   const {seq, status} = getLatestUploadRecord(uuid)
-  if (!seq) {
+  if (!status) {
     return {
       status: 404,
       body: {error: `${uuid} doesn't exit`},

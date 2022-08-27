@@ -11,8 +11,9 @@ const betterSqlite3 = require('better-sqlite3')
 
 const {CloudTasksClient} = require('@google-cloud/tasks')
 const {
-  log,
   Sentry,
+  getExpiryFromJwt,
+  log,
   taskCallbackUrlPrefix,
   taskStatusUrlPrefix,
   wowConfig,
@@ -118,13 +119,6 @@ async function obsUpsertHandler(req, { isLocalDev }) {
     }
   }
   log.info(`Handling obs ${uuid}`)
-  // FIXME should we support ETag or similar to detect duplicate uploads?
-  // FIXME should we roll our own resumable upload logic where the client can
-  //   query how much data the server has? probably requires an endpoint to
-  //   query/get upload URL and then uploads are done to that second URL. Not
-  //   sure if we can do it with one request. Maybe with websockets? Don't know
-  //   if service workers are aware of websockets or if they're treated the
-  //   same way.
   const expectedContentType = 'multipart/form-data'
   const isNotMultipart = (req.headers['content-type'] || '')
     .indexOf(expectedContentType) < 0
@@ -528,7 +522,6 @@ async function createInatObs({axios, apiBaseUrl}, uploadRecord) {
   const resp = await axios.post(`${apiBaseUrl}/v1/observations`, obsBody, {
     headers: { Authorization: apiToken }
   })
-  // FIXME check for, and handle, auth failures from upstream
   log.debug(`iNat response status for POST ${uuid}: ${resp.status}`)
   return resp.data
 }
@@ -548,7 +541,6 @@ async function updateInatObs({axios, apiBaseUrl}, uploadRecord) {
       contentType: p.mimetype,
       knownLength: p.size,
     })
-    // FIXME check for, and handle, auth failures from upstream
     return axios.post(
       `${apiBaseUrl}/v1/observation_photos`,
       form,
@@ -564,7 +556,6 @@ async function updateInatObs({axios, apiBaseUrl}, uploadRecord) {
   log.debug(`Deleting ${photoIdsToDelete.length} photos for upload ${uploadId}`)
   await Promise.all(photoIdsToDelete.map(id => {
     log.debug(`Deleting photo ${id}`)
-    // FIXME check for, and handle, auth failures from upstream
     return axios.delete(
       `${apiBaseUrl}/v1/observation_photos/${id}`,
       { headers: { Authorization: apiToken } }
@@ -574,7 +565,6 @@ async function updateInatObs({axios, apiBaseUrl}, uploadRecord) {
   log.debug(`Deleting ${obsFieldIdsToDelete.length} obs fields for upload ${uploadId}`)
   await Promise.all(obsFieldIdsToDelete.map(id => {
     log.debug(`Deleting obs field ${id}`)
-    // FIXME check for, and handle, auth failures from upstream
     return axios.delete(
       `${apiBaseUrl}/v1/observation_field_values/${id}`,
       { headers: { Authorization: apiToken } }
@@ -591,7 +581,6 @@ async function updateInatObs({axios, apiBaseUrl}, uploadRecord) {
     },
     { headers: { Authorization: apiToken } }
   )
-  // FIXME check for, and handle, auth failures from upstream
   log.debug(`iNat response status for PUT ${inatId}: ${resp.status}`)
   return resp.data
 }
@@ -643,13 +632,22 @@ async function scheduleGcpTask(httpMethod, url) {
 
 async function authMiddleware(req, res, next) {
   const authHeader = req.headers['authorization']
-  // FIXME could check it looks like a JWT
-  // FIXME check JWTs have "enough" time left before expiry to reduce chance of
-  //   upstream failures
   if (!authHeader) {
     return res
       .status(401)
       .send({error: `Authorization header must be provided`})
+  }
+  if (req.method !== 'GET') {
+    try {
+      const exp = getExpiryFromJwt(authHeader)
+      const isExpiringWithinFiveMins = (Date.now() / 1000) + (5 * 60) > exp
+      if (isExpiringWithinFiveMins) {
+        return res.status(401).send({error: 'Token is expiring too soon'})
+      }
+    } catch (err) {
+      log.error('Failed while checking JWT exp', err)
+      return res.status(500).send({error: 'The server exploded'})
+    }
   }
   try {
     log.debug(`Checking if supplied auth is valid: ${authHeader.substr(0,20)}...`)
@@ -751,7 +749,6 @@ async function handleUpstreamError(err, uploadId, uploadDirPath) {
   } else {
     log.error('Request to iNat failed', err)
   }
-  // FIXME how do we know when retries have been exhausted?
   const isTerminalFailure = upstreamStatus === 401
   if (isTerminalFailure) {
     setTerminalRecordStatus(uploadId, 'failure')
@@ -762,8 +759,8 @@ async function handleUpstreamError(err, uploadId, uploadDirPath) {
     return {status, body: {isSuccess: false, canRetry: false}}
   }
   const status = 500 // will cause GCP Tasks to retry
-  // GCP probably doesn't care about the body, but as a dev calling the
-  // endpoint, it's useful to know what happened
+  // GCP doesn't care about the body, but as a dev calling the endpoint, it's
+  // useful to know what happened
   return {status, body: {isSuccess: false, canRetry: true}}
 }
 

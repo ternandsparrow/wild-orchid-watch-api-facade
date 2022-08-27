@@ -149,8 +149,17 @@ function getRequiredEnvVar(varName) {
   return result
 }
 
+function getExpiryFromJwt(jwt) {
+  const theSecondPart = jwt.split('.')[1]
+  const buff = Buffer.from(theSecondPart, 'base64')
+  const jsonStr = buff.toString('ascii')
+  const parsed = JSON.parse(jsonStr)
+  return parsed.exp
+}
+
 module.exports = {
   Sentry,
+  getExpiryFromJwt,
   getUrlEnvVar,
   json,
   log,

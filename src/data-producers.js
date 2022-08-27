@@ -453,12 +453,17 @@ function getUuidsWithPendingStatus(req) {
   })()
   const pendingUuids = getDb()
     .prepare(`
-      SELECT uuid, status
+      SELECT uuid, status, updatedAt, seq
       FROM uploads
       WHERE status = 'pending'
       ORDER BY updatedAt DESC
       ${limitClause}
-    `).all()
+    `).all().map(r => ({
+      uuid: r.uuid,
+      status: r.status,
+      updatedAtUTC: r.updatedAt,
+      type: r.seq ? 'update' : 'delete',
+    }))
   // asyncHandler wrapped functions must return promises
   return Promise.resolve({body: {
     pendingUuids,

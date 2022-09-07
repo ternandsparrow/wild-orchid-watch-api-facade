@@ -61,11 +61,11 @@ ZZ+="$(getOptionalEnvParam GCP_REGION)"
 ZZ+="$(getEnvParam GCP_PROJECT)"
 # could use "--service-account <some iam role>" but using GCP_KEY_JSON_BASE64
 # mirrors local dev, so we know it works and it'll be easier to debug problems
-ZZ+="$(getEnvParam GCP_KEY_JSON_BASE64)"
-ZZ+="$(getEnvParam CLIENT1_API_KEY)"
-ZZ+="$(getEnvParam CLIENT2_API_KEY)"
-ZZ+="$(getEnvParam CLIENT3_API_KEY)"
-ZZ+="$(getEnvParam CLIENT4_API_KEY | sed 's/,//')"
+ZZ+="$(getEnvParam GCP_KEY_JSON_BASE64 ${secretPrefix})"
+ZZ+="$(getEnvParam CLIENT1_API_KEY ${secretPrefix})"
+ZZ+="$(getEnvParam CLIENT2_API_KEY ${secretPrefix})"
+ZZ+="$(getEnvParam CLIENT3_API_KEY ${secretPrefix})"
+ZZ+="$(getEnvParam CLIENT4_API_KEY ${secretPrefix} | sed 's/,//')"
 
 echo "[INFO] doing deploy"
 gcloud beta run deploy $GCP_SERVICE_NAME \

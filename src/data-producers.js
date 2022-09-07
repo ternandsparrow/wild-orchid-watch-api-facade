@@ -28,7 +28,7 @@ const getDb = (() => {
       log.debug('Creating new sqlite client')
       instance = betterSqlite3(dbPath)
       process.on('exit', () => {
-        console.debug('Closing sqlite connection')
+        log.debug('Closing sqlite connection')
         instance.close()
       })
     }
@@ -227,7 +227,7 @@ async function taskCallbackDeleteHandler(uuid, { axios, apiBaseUrl }) {
   } catch (err) {
     const upstreamStatus = err.response?.status
     if (upstreamStatus === 404) {
-      console.warn(`obs ${inatId} did not exist on iNat, nothing to do`)
+      log.warn(`obs ${inatId} did not exist on iNat, nothing to do`)
       setTerminalRecordStatus(uploadId, 'success')
       return {body: {
         isSuccess: true,
@@ -654,8 +654,9 @@ async function authMiddleware(req, res, next) {
       return res.status(500).send({error: 'The server exploded'})
     }
   }
+  const authTokenStart = authHeader.substr(0,20)
   try {
-    log.debug(`Checking if supplied auth is valid: ${authHeader.substr(0,20)}...`)
+    log.trace(`Checking if supplied auth is valid: ${authTokenStart}...`)
     const resp = await realAxios.get(`${wowConfig().apiBaseUrl}/v1/users/me`, {
       headers: { Authorization: authHeader }
     })
@@ -663,7 +664,9 @@ async function authMiddleware(req, res, next) {
     req.userDetail = resp.data?.results[0]
     return next()
   } catch (err) {
-    log.info('Verifying auth passed in observations bundle has failed!', err.response.status)
+    log.info(
+      `Verifying auth ${authTokenStart}... passed in observations bundle has failed!`,
+      err.response.status)
     return res
       .status(401)
       .send({
@@ -760,7 +763,7 @@ async function handleUpstreamError(err, uploadId, uploadDirPath) {
     const status = 200 // not success as such, but the task cannot be retried
     const noRetryMsg = 'Above error was terminal, task will not be retried\n'
     await fsP.appendFile(errorLogPath, noRetryMsg)
-    console.warn(noRetryMsg)
+    log.warn(noRetryMsg)
     return {status, body: {isSuccess: false, canRetry: false}}
   }
   const status = 500 // will cause GCP Tasks to retry

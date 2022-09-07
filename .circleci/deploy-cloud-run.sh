@@ -55,6 +55,7 @@ ZZ+="$(getEnvParam GCS_BUCKET ${secretPrefix})"
 ZZ+="$(getEnvParam GCP_QUEUE ${secretPrefix})"
 ZZ+="$(getOptionalEnvParam LOG_LEVEL ${secretPrefix})"
 ZZ+="DEPLOYED_ENV_NAME=${DEPLOYED_ENV_NAME},"
+ZZ+="$(getEnvParam CALLBACK_SECRET ${secretPrefix})"
 
 ZZ+="$(getEnvParam SENTRY_DSN)"
 ZZ+="$(getOptionalEnvParam GCP_REGION)"

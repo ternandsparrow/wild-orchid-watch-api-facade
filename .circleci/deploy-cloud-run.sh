@@ -75,7 +75,7 @@ gcloud beta run deploy $GCP_SERVICE_NAME \
   --execution-environment gen2 \
   $commonParams \
   --allow-unauthenticated \
-  --revision-suffix=${IMAGE_TAG:?}.${theTimestamp} \
+  --revision-suffix=${IMAGE_TAG:?}-${theTimestamp} \
   --max-instances=1 \
   --cpu 1 \
   --memory 512Mi \

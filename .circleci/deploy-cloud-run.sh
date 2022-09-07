@@ -76,7 +76,7 @@ gcloud beta run deploy $GCP_SERVICE_NAME \
   --revision-suffix=${IMAGE_TAG:?} \
   --max-instances=1 \
   --cpu 1 \
-  --memory 512G \
+  --memory 512Mi \
   --set-env-vars $ZZ
 set -x
 

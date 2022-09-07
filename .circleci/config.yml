@@ -87,7 +87,10 @@ jobs:
 workflows:
   dev:
     jobs:
-      - do_tests
+      - do_tests:
+          filters:
+            branches:
+              ignore: master
       - build_push_image:
           filters:
             branches:

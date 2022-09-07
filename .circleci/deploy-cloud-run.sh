@@ -67,13 +67,16 @@ ZZ+="$(getEnvParam CLIENT2_API_KEY)"
 ZZ+="$(getEnvParam CLIENT3_API_KEY)"
 ZZ+="$(getEnvParam CLIENT4_API_KEY | sed 's/,//')"
 
+echo "[INFO] doing deploy"
 gcloud beta run deploy $GCP_SERVICE_NAME \
   --image ${IMAGE_FULL:?} \
   --execution-environment gen2 \
   $commonParams \
   --allow-unauthenticated \
   --revision-suffix=${IMAGE_TAG:?} \
-  --max-instances=2 \
+  --max-instances=1 \
+  --cpu 1 \
+  --memory 512G \
   --set-env-vars $ZZ
 set -x
 

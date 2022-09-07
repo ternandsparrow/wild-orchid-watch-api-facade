@@ -1,8 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+theUuid=${1:?first param must be uuid to use}
+
+cat << HEREDOC
 {
   "latitude": -34.924175892671144,
   "longitude": 138.6099316040606,
   "observed_on_string": "2022-09-07T03:39:20.884Z",
-  "species_guess": "steal me",
+  "species_guess": "loadtest $(date +%s)",
   "observation_field_values_attributes": {
     "0": {
       "observation_field_id": 39,
@@ -220,5 +226,6 @@
   "description": null,
   "captive_flag": false,
   "geoprivacy": "obscured",
-  "uuid": "ab066540-2e5e-11ed-b313-fdf7206c966c"
+  "uuid": "${theUuid}"
 }
+HEREDOC

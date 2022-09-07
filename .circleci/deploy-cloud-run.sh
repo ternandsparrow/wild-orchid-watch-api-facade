@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 : ${CUSTOM_DOMAIN}
 : ${IMAGE_FULL}
 secretPrefix=${GCP_SECRET_PREFIX:?should be DEV_ or PROD_}
-theTimestamp=$(date +%Y%m%d-%H%M)
+theTimestamp=$(date +%Y%m%d%H%M)
 
 source ./config-env.sh
 commonParams="--platform managed --region ${GOOGLE_COMPUTE_ZONE:?}"
@@ -75,7 +75,7 @@ gcloud beta run deploy $GCP_SERVICE_NAME \
   --execution-environment gen2 \
   $commonParams \
   --allow-unauthenticated \
-  --revision-suffix=${IMAGE_TAG:?}_${theTimestamp} \
+  --revision-suffix=${IMAGE_TAG:?}.${theTimestamp} \
   --max-instances=1 \
   --cpu 1 \
   --memory 512Mi \

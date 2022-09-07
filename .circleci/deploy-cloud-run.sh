@@ -69,14 +69,14 @@ ZZ+="$(getEnvParam CLIENT2_API_KEY ${secretPrefix})"
 ZZ+="$(getEnvParam CLIENT3_API_KEY ${secretPrefix})"
 ZZ+="$(getEnvParam CLIENT4_API_KEY ${secretPrefix} | sed 's/,//')"
 
-theRev=${IMAGE_TAG:?}-${theTimestamp}
+theRev=$(echo ${IMAGE_TAG:?} | cut -c1-10)${theTimestamp}
 echo "[INFO] doing deploy for revision $theRev"
 gcloud beta run deploy $GCP_SERVICE_NAME \
   --image ${IMAGE_FULL:?} \
   --execution-environment gen2 \
   $commonParams \
   --allow-unauthenticated \
-  --revision-suffix=$GCP_SERVICE_NAME-$theRev \
+  --revision-suffix=$theRev \
   --max-instances=1 \
   --cpu 1 \
   --memory 512Mi \

@@ -18,6 +18,7 @@ const {
   taskStatusUrlPrefix,
   wowConfig,
 } = require('./lib.js')
+const oneHundredMb = 100 * 1000 * 1000
 
 const dbPath = process.env.DB_PATH || path.join(wowConfig().rootUploadDirPath, 'data.db')
 
@@ -493,20 +494,22 @@ async function createInatObs({axios, apiBaseUrl}, uploadRecord) {
   const photoResps = await Promise.all(photos.map(p => {
     const form = new FormData()
     const fileStream = fs.createReadStream(p.filepath)
+    log.debug(`Appending photo that is ${p.size / 1000}kb`)
     form.append('file', fileStream, {
       contentType: p.mimetype,
       knownLength: p.size,
     })
-    return axios.post(
-      `${apiBaseUrl}/v1/photos`,
-      form,
-      {
+    return axios({
+        method: 'post',
+        url: `${apiBaseUrl}/v1/photos`,
+        data: form,
         headers: {
           ...form.getHeaders(),
           Authorization: apiToken,
-        }
-      }
-    )
+        },
+        maxContentLength: oneHundredMb,
+        maxBodyLength: oneHundredMb,
+    })
   }))
   // FIXME catch image post error, like an image/* that iNat doesn't like
   const photoIds = photoResps.map(e => e.data.id)
@@ -542,20 +545,22 @@ async function updateInatObs({axios, apiBaseUrl}, uploadRecord) {
     const form = new FormData()
     const fileStream = fs.createReadStream(p.filepath)
     form.append('observation_photo[observation_id]', inatId)
+    log.debug(`Appending photo as part of obs update that is ${p.size / 1000}kb`)
     form.append('file', fileStream, {
       contentType: p.mimetype,
       knownLength: p.size,
     })
-    return axios.post(
-      `${apiBaseUrl}/v1/observation_photos`,
-      form,
-      {
+    return axios({
+        method: 'post',
+        url: `${apiBaseUrl}/v1/observation_photos`,
+        data: form,
         headers: {
           ...form.getHeaders(),
           Authorization: apiToken,
-        }
-      }
-    )
+        },
+        maxContentLength: oneHundredMb,
+        maxBodyLength: oneHundredMb,
+    })
   }))
   const photoIdsToDelete = JSON.parse(uploadRecord.photoIdsToDelete)
   log.debug(`Deleting ${photoIdsToDelete.length} photos for upload ${uploadId}`)

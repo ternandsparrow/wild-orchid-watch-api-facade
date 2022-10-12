@@ -79,7 +79,7 @@ gcloud beta run deploy $GCP_SERVICE_NAME \
   --revision-suffix=$theRev \
   --max-instances=1 \
   --cpu 1 \
-  --memory 512Mi \
+  --memory 1024Mi \
   --set-env-vars $ZZ
 set -x
 
